@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Animal Store - Your Pet Care Partner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Header & Navigation */
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.8rem;
+            font-weight: bold;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            transition: opacity 0.3s;
+            font-weight: 500;
+        }
+
+        .nav-links a:hover {
+            opacity: 0.8;
+        }
+
+        .auth-section {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .btn {
+            padding: 0.6rem 1.5rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .btn-primary {
+            background: white;
+            color: #667eea;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255,255,255,0.3);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: white;
+            border: 2px solid white;
+        }
+
+        .btn-secondary:hover {
+            background: white;
+            color: #667eea;
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4rem 0;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .hero p {
+            font-size: 1.3rem;
+            margin-bottom: 2rem;
+            opacity: 0.9;
+        }
+
+        /* Section Styles */
+        section {
+            padding: 3rem 0;
+        }
+
+        h2 {
+            font-size: 2rem;
+            margin-bottom: 2rem;
+            color: #333;
+            text-align: center;
+        }
+
+        /* Species Grid */
+        .species-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .species-card {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer;
+        }
+
+        .species-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 15px rgba(0,0,0,0.2);
+        }
+
+        .species-card img {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+        }
+
+        .species-card-content {
+            padding: 1.5rem;
+        }
+
+        .species-card h3 {
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Products Grid */
+        .products-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .product-card {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.3s;
+        }
+
+        .product-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .product-card img {
+            width: 100%;
+            height: 220px;
+            object-fit: cover;
+        }
+
+        .product-info {
+            padding: 1.5rem;
+        }
+
+        .product-name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #333;
+        }
+
+        .product-price {
+            font-size: 1.5rem;
+            color: #667eea;
+            font-weight: bold;
+            margin: 0.5rem 0;
+        }
+
+        .product-badge {
+            display: inline-block;
+            background: #ff6b6b;
+            color: white;
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .stock-info {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        /* Filters */
+        .filters {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .filter-group {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filter-group label {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .filter-group select,
+        .filter-group input {
+            padding: 0.6rem;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        .filter-group select:focus,
+        .filter-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* News Grid */
+        .news-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .news-card {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.3s;
+        }
+
+        .news-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .news-card img {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+        }
+
+        .news-content {
+            padding: 1.5rem;
+        }
+
+        .news-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 0.8rem;
+            color: #333;
+        }
+
+        .news-meta {
+            color: #999;
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+
+        .news-summary {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        /* Loading & Error States */
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            font-size: 1.2rem;
+            color: #667eea;
+        }
+
+        .error {
+            background: #ff6b6b;
+            color: white;
+            padding: 1rem;
+            border-radius: 5px;
+            margin: 1rem 0;
+            text-align: center;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 2000;
+            overflow-y: auto;
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 10px;
+            max-width: 600px;
+            width: 100%;
+            padding: 2rem;
+            position: relative;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .close-modal {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            font-size: 2rem;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .close-modal:hover {
+            color: #333;
+        }
+
+        .modal-content h2 {
+            margin-bottom: 1.5rem;
+            color: #667eea;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.8rem;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* Footer */
+        footer {
+            background: #333;
+            color: white;
+            text-align: center;
+            padding: 2rem 0;
+            margin-top: 4rem;
+        }
+
+        .page {
+            display: none;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        .user-info {
+            display: none;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .user-info.active {
+            display: flex;
+        }
+
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none;
+            }
+
+            .hero h1 {
+                font-size: 2rem;
+            }
+
+            .species-grid,
+            .products-grid,
+            .news-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <nav class="container">
+            <div class="logo">🐾 Animal Store</div>
+            <ul class="nav-links">
+                <li><a href="#" onclick="showPage('home')">Home</a></li>
+                <li><a href="#" onclick="showPage('products')">Products</a></li>
+                <li><a href="#" onclick="showPage('news')">Blog</a></li>
+            </ul>
+            <div class="auth-section">
+                <div class="user-info" id="userInfo">
+                    <span id="username"></span>
+                    <button class="btn btn-secondary" onclick="logout()">Logout</button>
+                </div>
+                <div id="authButtons">
+                    <button class="btn btn-primary" onclick="openModal('login')">Login</button>
+                    <button class="btn btn-secondary" onclick="openModal('register')">Register</button>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Home Page -->
+    <div id="homePage" class="page active">
+        <section class="hero">
+            <div class="container">
+                <h1>Welcome to Animal Store</h1>
+                <p>Your one-stop shop for all your pet care needs</p>
+                <button class="btn btn-primary" style="font-size: 1.1rem; padding: 0.8rem 2rem;" onclick="showPage('products')">
+                    Shop Now
+                </button>
+            </div>
+        </section>
+
+        <section class="container">
+            <h2>Our Animal Species</h2>
+            <div class="species-grid" id="speciesGrid"></div>
+        </section>
+
+        <section class="container">
+            <h2>New Arrivals</h2>
+            <div class="products-grid" id="newProductsGrid"></div>
+        </section>
+
+        <section class="container">
+            <h2>Latest News</h2>
+            <div class="news-grid" id="latestNewsGrid"></div>
+        </section>
+    </div>
+
+    <!-- Products Page -->
+    <div id="productsPage" class="page">
+        <section class="hero">
+            <div class="container">
+                <h1>Our Products</h1>
+                <p>Find the perfect products for your beloved pets</p>
+            </div>
+        </section>
+
+        <section class="container">
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Species:</label>
+                    <select id="filterSpecies" onchange="filterProducts()">
+                        <option value="">All Species</option>
+                    </select>
+
+                    <label>Category:</label>
+                    <select id="filterCategory" onchange="filterProducts()">
+                        <option value="">All Categories</option>
+                    </select>
+
+                    <label>Search:</label>
+                    <input type="text" id="searchInput" placeholder="Search products..." onkeyup="filterProducts()">
+
+                    <button class="btn btn-primary" onclick="resetFilters()">Reset</button>
+                </div>
+            </div>
+
+            <div class="products-grid" id="productsGrid"></div>
+        </section>
+    </div>
+
+    <!-- News Page -->
+    <div id="newsPage" class="page">
+        <section class="hero">
+            <div class="container">
+                <h1>Pet Care Blog</h1>
+                <p>Tips, news, and articles about pet care</p>
+            </div>
+        </section>
+
+        <section class="container">
+            <div class="news-grid" id="newsGrid"></div>
+        </section>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal('login')">&times;</span>
+            <h2>Login</h2>
+            <div id="loginError" class="error" style="display: none;"></div>
+            <form onsubmit="login(event)">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="loginUsername" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="loginPassword" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Login</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Register Modal -->
+    <div id="registerModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal('register')">&times;</span>
+            <h2>Register</h2>
+            <div id="registerError" class="error" style="display: none;"></div>
+            <form onsubmit="register(event)">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="registerUsername" required>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="registerEmail" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="registerPassword" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Register</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Product Detail Modal -->
+    <div id="productModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal('product')">&times;</span>
+            <div id="productDetail"></div>
+        </div>
+    </div>
+
+    <!-- News Detail Modal -->
+    <div id="newsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal('news')">&times;</span>
+            <div id="newsDetail"></div>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 Animal Store. All rights reserved.</p>
+            <p>Your trusted partner in pet care</p>
+        </div>
+    </footer>
+
+    <script>
+        const API_URL = 'http://localhost:8000/api';
+        let currentUser = null;
+        let allProducts = [];
+        let allSpecies = [];
+        let allCategories = [];
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', () => {
+            checkAuth();
+            loadHomeData();
+        });
+
+        // Authentication
+        function checkAuth() {
+            const token = localStorage.getItem('token');
+            const username = localStorage.getItem('username');
+            if (token && username) {
+                currentUser = { username, token };
+                document.getElementById('userInfo').classList.add('active');
+                document.getElementById('authButtons').style.display = 'none';
+                document.getElementById('username').textContent = `Hello, ${username}`;
+            }
+        }
+
+        async function login(e) {
+            e.preventDefault();
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+
+            try {
+                const response = await fetch(`${API_URL}/auth/login?username=${username}&password=${password}`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) throw new Error('Login failed');
+
+                const data = await response.json();
+                localStorage.setItem('token', data.access_token);
+                localStorage.setItem('username', username);
+                
+                currentUser = { username, token: data.access_token };
+                document.getElementById('userInfo').classList.add('active');
+                document.getElementById('authButtons').style.display = 'none';
+                document.getElementById('username').textContent = `Hello, ${username}`;
+                
+                closeModal('login');
+                document.getElementById('loginUsername').value = '';
+                document.getElementById('loginPassword').value = '';
+            } catch (error) {
+                document.getElementById('loginError').textContent = 'Login failed. Please check your credentials.';
+                document.getElementById('loginError').style.display = 'block';
+            }
+        }
+
+        async function register(e) {
+            e.preventDefault();
+            const username = document.getElementById('registerUsername').value;
+            const email = document.getElementById('registerEmail').value;
+            const password = document.getElementById('registerPassword').value;
+
+            try {
+                const response = await fetch(`${API_URL}/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, email, password })
+                });
+
+                if (!response.ok) throw new Error('Registration failed');
+
+                alert('Registration successful! Please login.');
+                closeModal('register');
+                openModal('login');
+                
+                document.getElementById('registerUsername').value = '';
+                document.getElementById('registerEmail').value = '';
+                document.getElementById('registerPassword').value = '';
+            } catch (error) {
+                document.getElementById('registerError').textContent = 'Registration failed. Username or email may already exist.';
+                document.getElementById('registerError').style.display = 'block';
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+            currentUser = null;
+            document.getElementById('userInfo').classList.remove('active');
+            document.getElementById('authButtons').style.display = 'flex';
+            showPage('home');
+        }
+
+        // Page Navigation
+        function showPage(page) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            
+            if (page === 'home') {
+                document.getElementById('homePage').classList.add('active');
+                loadHomeData();
+            } else if (page === 'products') {
+                document.getElementById('productsPage').classList.add('active');
+                loadProducts();
+            } else if (page === 'news') {
+                document.getElementById('newsPage').classList.add('active');
+                loadAllNews();
+            }
+        }
+
+        // Modal Functions
+        function openModal(type) {
+            document.getElementById(`${type}Modal`).classList.add('active');
+        }
+
+        function closeModal(type) {
+            document.getElementById(`${type}Modal`).classList.remove('active');
+            document.querySelectorAll('.error').forEach(e => e.style.display = 'none');
+        }
+
+        // Load Data Functions
+        async function loadHomeData() {
+            try {
+                const response = await fetch(`${API_URL}/home`);
+                const data = await response.json();
+
+                displaySpecies(data.animal_species);
+                displayProducts(data.new_products, 'newProductsGrid');
+                displayNews(data.latest_news, 'latestNewsGrid');
+            } catch (error) {
+                console.error('Error loading home data:', error);
+            }
+        }
+
+        async function loadProducts() {
+            try {
+                const [productsRes, speciesRes, categoriesRes] = await Promise.all([
+                    fetch(`${API_URL}/products`),
+                    fetch(`${API_URL}/species`),
+                    fetch(`${API_URL}/categories`)
+                ]);
+
+                allProducts = await productsRes.json();
+                allSpecies = await speciesRes.json();
+                allCategories = await categoriesRes.json();
+
+                populateFilters();
+                displayProducts(allProducts, 'productsGrid');
+            } catch (error) {
+                console.error('Error loading products:', error);
+            }
+        }
+
+        async function loadAllNews() {
+            try {
+                const response = await fetch(`${API_URL}/news`);
+                const news = await response.json();
+                displayNews(news, 'newsGrid');
+            } catch (error) {
+                console.error('Error loading news:', error);
+            }
+        }
+
+        function populateFilters() {
+            const speciesSelect = document.getElementById('filterSpecies');
+            const categorySelect = document.getElementById('filterCategory');
+
+            speciesSelect.innerHTML = '<option value="">All Species</option>';
+            allSpecies.forEach(s => {
+                speciesSelect.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+            });
+
+            categorySelect.innerHTML = '<option value="">All Categories</option>';
+            allCategories.forEach(c => {
+                categorySelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+            });
+        }
+
+        function filterProducts() {
+            const speciesId = document.getElementById('filterSpecies').value;
+            const categoryId = document.getElementById('filterCategory').value;
+            const search = document.getElementById('searchInput').value.toLowerCase();
+
+            let filtered = allProducts.filter(p => {
+                const matchSpecies = !speciesId || p.species_id == speciesId;
+                const matchCategory = !categoryId || p.category_id == categoryId;
+                const matchSearch = !search || p.name.toLowerCase().includes(search);
+                return matchSpecies && matchCategory && matchSearch;
+            });
+
+            displayProducts(filtered, 'productsGrid');
+        }
+
+        function resetFilters() {
+            document.getElementById('filterSpecies').value = '';
+            document.getElementById('filterCategory').value = '';
+            document.getElementById('searchInput').value = '';
+            filterProducts();
+        }
+
+        // Display Functions
+        function displaySpecies(species) {
+            const grid = document.getElementById('speciesGrid');
+            grid.innerHTML = species.map(s => `
+                <div class="species-card" onclick="filterBySpecies(${s.id})">
+                    <img src="${s.image_url || 'https://via.placeholder.com/300x200?text=' + s.name}" alt="${s.name}">
+                    <div class="species-card-content">
+                        <h3>${s.name}</h3>
+                        <p>${s.description || 'Explore our products for ' + s.name}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function displayProducts(products, gridId) {
+            const grid = document.getElementById(gridId);
+            if (products.length === 0) {
+                grid.innerHTML = '<p style="text-align: center; padding: 2rem; grid-column: 1/-1;">No products found.</p>';
+                return;
+            }
+
+            grid.innerHTML = products.map(p => `
+                <div class="product-card" onclick="showProductDetail(${p.id})">
+                    <img src="${p.image_url || 'https://via.placeholder.com/300x220?text=Product'}" alt="${p.name}">
+                    <div class="product-info">
+                        ${p.is_new ? '<span class="product-badge">NEW</span>' : ''}
+                        <div class="product-name">${p.name}</div>
+                        <div class="product-price">$${p.price.toFixed(2)}</div>
+                        <div class="stock-info">${p.stock > 0 ? `In Stock: ${p.stock}` : 'Out of Stock'}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function displayNews(news, gridId) {
+            const grid = document.getElementById(gridId);
+            grid.innerHTML = news.map(n => `
+                <div class="news-card" onclick="showNewsDetail(${n.id})">
+                    <img src="${n.image_url || 'https://via.placeholder.com/400x200?text=News'}" alt="${n.title}">
+                    <div class="news-content">
+                        <div class="news-title">${n.title}</div>
+                        <div class="news-meta">By ${n.author || 'Anonymous'} • ${new Date(n.published_at).toLocaleDateString()}</div>
+                        <p class="news-summary">${n.summary || n.content.substring(0, 150) + '...'}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function showProductDetail(id) {
+            try {
+                const response = await fetch(`${API_URL}/products/${id}`);
+                const product = await response.json();
+
+                document.getElementById('productDetail').innerHTML = `
+                    <img src="${product.image_url || 'https://via.placeholder.com/600x400?text=Product'}" style="width: 100%; border-radius: 10px; margin-bottom: 1.5rem;">
+                    ${product.is_new ? '<span class="product-badge">NEW ARRIVAL</span>' : ''}
+                    <h2>${product.name}</h2>
+                    <p style="color: #667eea; font-size: 2rem; font-weight: bold; margin: 1rem 0;">$${product.price.toFixed(2)}</p>
+                    <p style="color: #666; margin-bottom: 1rem;">${product.description || 'No description available.'}</p>
+                    <p style="margin-bottom: 1rem;"><strong>Species:</strong> ${product.species?.name || 'N/A'}</p>
+                    <p style="margin-bottom: 1rem;"><strong>Category:</strong> ${product.category?.name || 'N/A'}</p>
+                    <p><strong>Stock:</strong> ${product.stock > 0 ? product.stock + ' available' : 'Out of stock'}</p>
+                `;
+                openModal('product');
+            } catch (error) {
+                console.error('Error loading product details:', error);
+            }
+        }
+
+        async function showNewsDetail(id) {
+            try {
+                const response = await fetch(`${API_URL}/news/${id}`);
+                const news = await response.json();
+
+                document.getElementById('newsDetail').innerHTML = `
+                    <img src="${news.image_url || 'https://via.placeholder.com/600x300?text=News'}" style="width: 100%; border-radius: 10px; margin-bottom: 1.5rem;">
+                    <h2>${news.title}</h2>
+                    <div class="news-meta">By ${news.author || 'Anonymous'} • ${new Date(news.published_at).toLocaleDateString()}</div>
+                    <div style="margin-top: 1.5rem; line-height: 1.8; color: #333;">${news.content.replace(/\n/g, '<br>')}</div>
+                `;
+                openModal('news');
+            } catch (error) {
+                console.error('Error loading news details:', error);
+            }
+        }
+
+        function filterBySpecies(speciesId) {
+            showPage('products');
+            setTimeout(() => {
+                document.getElementById('filterSpecies').value = speciesId;
+                filterProducts();
+            }, 100);
+        }
+    </script>
+</body>
+</html>
