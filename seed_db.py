@@ -3,9 +3,8 @@ from datetime import datetime, timedelta
 from passlib.context import CryptContext
 
 # Import models from main.py
-from main import Base, User, AnimalSpecies, ProductCategory, Product, News
-from main import engine, SessionLocal
-
+from db import engine, SessionLocal
+from db import Base, User, AnimalSpecies, ProductCategory, Product, News
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -530,4 +529,4 @@ def main():
         db.close()
 
 if __name__ == "__main__":
-    main()
+    print(get_password_hash("admin123."))

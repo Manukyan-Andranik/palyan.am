@@ -140,7 +140,7 @@ class ProductResponse(BaseModel):
     price: float
     stock: int
     image_url: Optional[str]
-    species_id: int
+    species_id: Optional[int]
     category_id: int
     is_new: bool
     created_at: datetime
