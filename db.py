@@ -171,6 +171,6 @@ class NewsResponse(BaseModel):
     summary: Optional[str]
     image_url: Optional[str]
     author: Optional[str]
-    published_at: datetime
-    created_at: datetime
+    published_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
