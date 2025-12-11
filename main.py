@@ -47,10 +47,10 @@ def get_db():
         db.close()
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    return Config.security["pwd_context"].verify(plain_password, hashed_password)
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    return Config.security["pwd_context"].hash(password)
 
 def create_access_token(data: dict):
     return jwt.encode(data, Config.security["SECRET_KEY"], algorithm=Config.security["ALGORITHM"])
