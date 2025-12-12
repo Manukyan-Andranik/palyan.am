@@ -1,8 +1,9 @@
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean, Enum as SQLEnum
+import enum
 
 from config import Config
 
@@ -13,6 +14,14 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Language Enum
+class LanguageEnum(str, enum.Enum):
+    EN = "en"
+    RU = "ru"
+    HY = "hy"  # Armenian
+
+# ==================== MODELS ====================
 
 class User(Base):
     __tablename__ = "users"
@@ -26,25 +35,47 @@ class User(Base):
 class AnimalSpecies(Base):
     __tablename__ = "animal_species"
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True)
-    description = Column(Text)
+    name = Column(String, unique=True, index=True)  # Default language name
+    description = Column(Text)  # Default language description
     image_url = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     products = relationship("Product", back_populates="species")
+    translations = relationship("AnimalSpeciesTranslation", back_populates="species", cascade="all, delete-orphan")
+
+class AnimalSpeciesTranslation(Base):
+    __tablename__ = "animal_species_translations"
+    id = Column(Integer, primary_key=True, index=True)
+    species_id = Column(Integer, ForeignKey("animal_species.id", ondelete="CASCADE"))
+    language = Column(SQLEnum(LanguageEnum), nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    species = relationship("AnimalSpecies", back_populates="translations")
 
 class ProductCategory(Base):
     __tablename__ = "product_categories"
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True)
-    description = Column(Text)
+    name = Column(String, unique=True, index=True)  # Default language name
+    description = Column(Text)  # Default language description
     created_at = Column(DateTime, default=datetime.utcnow)
     products = relationship("Product", back_populates="category")
+    translations = relationship("ProductCategoryTranslation", back_populates="category", cascade="all, delete-orphan")
+
+class ProductCategoryTranslation(Base):
+    __tablename__ = "product_category_translations"
+    id = Column(Integer, primary_key=True, index=True)
+    category_id = Column(Integer, ForeignKey("product_categories.id", ondelete="CASCADE"))
+    language = Column(SQLEnum(LanguageEnum), nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    category = relationship("ProductCategory", back_populates="translations")
 
 class Product(Base):
     __tablename__ = "products"
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
-    description = Column(Text)
+    name = Column(String, index=True)  # Default language name
+    description = Column(Text)  # Default language description
     price = Column(Float)
     stock = Column(Integer, default=0)
     image_url = Column(String)
@@ -54,17 +85,40 @@ class Product(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     species = relationship("AnimalSpecies", back_populates="products")
     category = relationship("ProductCategory", back_populates="products")
+    translations = relationship("ProductTranslation", back_populates="product", cascade="all, delete-orphan")
+
+class ProductTranslation(Base):
+    __tablename__ = "product_translations"
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"))
+    language = Column(SQLEnum(LanguageEnum), nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    product = relationship("Product", back_populates="translations")
 
 class News(Base):
     __tablename__ = "news"
     id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    content = Column(Text)
-    summary = Column(Text)
+    title = Column(String, index=True)  # Default language title
+    content = Column(Text)  # Default language content
+    summary = Column(Text)  # Default language summary
     image_url = Column(String)
     author = Column(String)
     published_at = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
+    translations = relationship("NewsTranslation", back_populates="news", cascade="all, delete-orphan")
+
+class NewsTranslation(Base):
+    __tablename__ = "news_translations"
+    id = Column(Integer, primary_key=True, index=True)
+    news_id = Column(Integer, ForeignKey("news.id", ondelete="CASCADE"))
+    language = Column(SQLEnum(LanguageEnum), nullable=False)
+    title = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    summary = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    news = relationship("News", back_populates="translations")
 
 # Create all tables
 Base.metadata.create_all(bind=engine)
@@ -89,10 +143,23 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+# Translation Schemas
+class TranslationData(BaseModel):
+    en: Optional[Dict[str, Optional[str]]] = None
+    ru: Optional[Dict[str, Optional[str]]] = None
+    hy: Optional[Dict[str, Optional[str]]] = None
+
+class AnimalSpeciesTranslationSchema(BaseModel):
+    language: LanguageEnum
+    name: str
+    description: Optional[str] = None
+
 class AnimalSpeciesCreate(BaseModel):
     name: str
     description: Optional[str] = None
     image_url: Optional[str] = None
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
+    # Example: {"en": {"name": "Dog", "description": "..."}, "ru": {"name": "Собака", "description": "..."}}
 
 class AnimalSpeciesResponse(BaseModel):
     id: int
@@ -100,18 +167,31 @@ class AnimalSpeciesResponse(BaseModel):
     description: Optional[str]
     image_url: Optional[str]
     created_at: datetime
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
     model_config = ConfigDict(from_attributes=True)
+
+class ProductCategoryTranslationSchema(BaseModel):
+    language: LanguageEnum
+    name: str
+    description: Optional[str] = None
 
 class ProductCategoryCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
 
 class ProductCategoryResponse(BaseModel):
     id: int
     name: str
     description: Optional[str]
-    created_at: datetime
+    created_at: Optional[datetime] = None
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
     model_config = ConfigDict(from_attributes=True)
+
+class ProductTranslationSchema(BaseModel):
+    language: LanguageEnum
+    name: str
+    description: Optional[str] = None
 
 class ProductCreate(BaseModel):
     name: str
@@ -122,6 +202,7 @@ class ProductCreate(BaseModel):
     species_id: int
     category_id: int
     is_new: bool = False
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
@@ -132,6 +213,7 @@ class ProductUpdate(BaseModel):
     species_id: Optional[int] = None
     category_id: Optional[int] = None
     is_new: Optional[bool] = None
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
 
 class ProductResponse(BaseModel):
     id: int
@@ -146,7 +228,14 @@ class ProductResponse(BaseModel):
     created_at: datetime
     species: Optional[AnimalSpeciesResponse]
     category: Optional[ProductCategoryResponse]
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
     model_config = ConfigDict(from_attributes=True)
+
+class NewsTranslationSchema(BaseModel):
+    language: LanguageEnum
+    title: str
+    content: str
+    summary: Optional[str] = None
 
 class NewsCreate(BaseModel):
     title: str
@@ -155,6 +244,7 @@ class NewsCreate(BaseModel):
     image_url: Optional[str] = None
     author: Optional[str] = None
     published_at: Optional[datetime] = None
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
 
 class NewsUpdate(BaseModel):
     title: Optional[str] = None
@@ -163,6 +253,7 @@ class NewsUpdate(BaseModel):
     image_url: Optional[str] = None
     author: Optional[str] = None
     published_at: Optional[datetime] = None
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
 
 class NewsResponse(BaseModel):
     id: int
@@ -173,4 +264,30 @@ class NewsResponse(BaseModel):
     author: Optional[str]
     published_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    translations: Optional[Dict[str, Dict[str, Optional[str]]]] = None
     model_config = ConfigDict(from_attributes=True)
+
+# ==================== HELPER FUNCTIONS ====================
+
+def get_translations_dict(translation_objects, fields: list) -> Dict[str, Dict[str, Optional[str]]]:
+    """Convert translation objects to dictionary format."""
+    result = {}
+    for trans in translation_objects:
+        lang = trans.language.value
+        result[lang] = {field: getattr(trans, field, None) for field in fields}
+    return result
+
+def add_translations_to_object(db_object, translations_dict: Dict[str, Dict[str, Optional[str]]], translation_model):
+    """Add translation objects to a database object."""
+    if not translations_dict:
+        return
+    
+    for lang, fields in translations_dict.items():
+        if lang not in [l.value for l in LanguageEnum]:
+            continue
+        
+        translation = translation_model(
+            language=LanguageEnum(lang),
+            **fields
+        )
+        db_object.translations.append(translation)

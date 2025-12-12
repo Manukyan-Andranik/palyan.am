@@ -16,3 +16,6 @@ class Config:
     database = {
         "SQLALCHEMY_DATABASE_URL": os.getenv("SQLALCHEMY_DATABASE_URL")
     }
+
+    def hash(password):
+        return Config.security["pwd_context"].hash(password)
