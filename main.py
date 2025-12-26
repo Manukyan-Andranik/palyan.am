@@ -1,55 +1,56 @@
-# main.py
-import jwt
-from sqlalchemy.orm import Session, joinedload
-from typing import Optional, List, Dict
-
-from fastapi import FastAPI, HTTPException, Depends, Security, Query
+from typing import Optional, List
+from fastapi import FastAPI, HTTPException, Depends, status, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials
-
-from sqlalchemy.inspection import inspect as sa_inspect
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 
 from db import (
-    User, UserCreate, UserResponse,
-    AnimalSpecies, AnimalSpeciesCreate, AnimalSpeciesResponse, AnimalSpeciesTranslation,
-    ProductCategory, ProductCategoryCreate, ProductCategoryResponse, ProductCategoryTranslation,
-    Product, ProductCreate, ProductUpdate, ProductResponse, ProductTranslation,
-    News, NewsCreate, NewsUpdate, NewsResponse, NewsTranslation,
-    Token, SessionLocal, LanguageEnum,
-    get_translations_dict, add_translations_to_object
+    Base, engine, SessionLocal,
+    User, UserCreate, UserResponse, Token,
+    AnimalTypes, AnimalTypesCreate, AnimalTypesUpdate, AnimalTypesTranslation,
+    ProductCategory, ProductCategoryCreate, ProductCategoryUpdate, ProductCategoryTranslation,
+    Product, ProductCreate, ProductUpdate, ProductTranslation, 
+    ProductFeature, ProductFeatureTranslation,
+    News, NewsCreate, NewsUpdate, NewsTranslation, NewsFeatures, NewsFeaturesTranslation, NewsAuthor
 )
+from helpers import AppHelpers
+import schemas
 
-from config import Config
+# ---------------- INIT ----------------
+# Ensure tables exist
+with engine.begin() as conn:
+    # Drop all tables with CASCADE
+    conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS animal_types CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS animal_types_translations CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS product_categories CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS product_categories_translations CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS products CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS product_translations CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS product_features CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS product_features_translations CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS news_authors CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS news_author_translations CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS news CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS news_translations CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS news_features CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS news_features_translations CASCADE"))
+Base.metadata.create_all(bind=engine)
 
-# ---------- Helpers ----------
-class AttrDict(dict):
-    """A dict that supports attribute-style access: obj.key"""
-    __getattr__ = dict.get
-    __setattr__ = dict.__setitem__
-    __delattr__ = dict.__delitem__
+fastapi_app = FastAPI(title="Veterinary Pharmacy API", version="2.0.0")
 
-# ==================== FASTAPI APP ====================
-app = FastAPI(
-    title="Animal Store API",
-    version="2.0.0",
-    openapi_tags=[
-        {"name": "auth", "description": "Authentication endpoints"},
-        {"name": "admin", "description": "Admin endpoints, require Bearer token"},
-        {"name": "public", "description": "Public endpoints: User interface"}
-    ],
-    swagger_ui_init_oauth=None,
-)
-
-# CORS middleware
-app.add_middleware(
+fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==================== DEPENDENCIES ====================
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+# ---------------- DEPENDENCIES ----------------
 def get_db():
     db = SessionLocal()
     try:
@@ -57,591 +58,355 @@ def get_db():
     finally:
         db.close()
 
-def verify_password(plain_password, hashed_password):
-    return Config.security["pwd_context"].verify(plain_password, hashed_password)
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    return AppHelpers.get_user_by_token(db, token)
 
-def get_password_hash(password):
-    return Config.hash(password)
-
-def create_access_token(data: dict):
-    return jwt.encode(data, Config.security["SECRET_KEY"], algorithm=Config.security["ALGORITHM"])
-
-def get_current_user(credentials: HTTPAuthorizationCredentials = Security(Config.security["bearer_scheme"]), db: Session = Depends(get_db)):
-    if credentials is None:
-        raise HTTPException(status_code=401, detail="Authorization token missing")
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, Config.security["SECRET_KEY"], algorithms=[Config.security["ALGORITHM"]])
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(status_code=401, detail="Invalid authentication")
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid authentication")
-    
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+def get_admin_user(user: User = Depends(get_current_user)):
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
     return user
 
-def get_admin_user(current_user: User = Depends(get_current_user)):
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin privileges required")
-    return current_user
-
-# ==================== TRANSLATION HELPERS ====================
-def apply_language_filter(obj, lang: Optional[str] = None) -> Optional[AttrDict]:
-    """
-    Returns an AttrDict (dict with attribute access).
-    - Does NOT modify SQLAlchemy relationships.
-    - Produces a clean serializable object for FastAPI responses.
-    - Adds 'translations' mapping for all available translations.
-    - If lang is provided, overrides main fields with translation values when present.
-    """
-    if obj is None:
-        return None
-
-    # Collect ORM column keys
-    mapper = sa_inspect(obj.__class__)
-    column_keys = [col.key for col in mapper.columns]
-
-    # Get translations list if present
-    translations_list = getattr(obj, "translations", None)
-
-    # Build translations mapping
-    translations_dict: Dict[str, Dict[str, Optional[str]]] = {}
-    if translations_list:
-        for trans in translations_list:
-            tmapper = sa_inspect(trans.__class__)
-            tmap: Dict[str, Optional[str]] = {}
-            for tcol in tmapper.columns:
-                tkey = tcol.key
-                # skip metadata/fks
-                if tkey in ("id", "language", "created_at",
-                            "species_id", "category_id", "product_id", "news_id"):
-                    continue
-                tmap[tkey] = getattr(trans, tkey, None)
-            try:
-                lang_code = trans.language.value
-            except Exception:
-                lang_code = str(getattr(trans, "language", "") or "")
-            translations_dict[lang_code] = tmap
-
-    # Base object data from columns
-    data: Dict[str, Optional[object]] = {}
-    for key in column_keys:
-        data[key] = getattr(obj, key, None)
-
-    # If specific language requested, override fields
-    if lang and translations_list:
-        translation = next(
-            (t for t in translations_list if getattr(getattr(t, "language", None), "value", None) == lang),
-            None
-        )
-        if not translation:
-            translation = next((t for t in translations_list if getattr(t, "language", None) == lang), None)
-        if translation:
-            tmapper = sa_inspect(translation.__class__)
-            for tcol in tmapper.columns:
-                tkey = tcol.key
-                if tkey not in data:
-                    continue
-                if tkey in ("id", "language", "created_at",
-                            "species_id", "category_id", "product_id", "news_id"):
-                    continue
-                val = getattr(translation, tkey, None)
-                if val is not None:
-                    data[tkey] = val
-
-    # Attach translations mapping
-    data["translations"] = translations_dict
-
-    return AttrDict(data)
-
-def save_translations(db: Session, entity, translations_dict: dict, translation_model, foreign_key_field: str):
-    """Save translations for an entity."""
-    if not translations_dict:
-        return
-    
-    # Delete existing translations
-    db.query(translation_model).filter(
-        getattr(translation_model, foreign_key_field) == entity.id
-    ).delete()
-    db.flush()
-    
-    # Add new translations
-    for lang, fields in translations_dict.items():
-        if lang not in [l.value for l in LanguageEnum]:
-            continue
-        
-        translation_data = {
-            foreign_key_field: entity.id,
-            'language': LanguageEnum(lang),
-            **fields
-        }
-        translation = translation_model(**translation_data)
-        db.add(translation)
-    
-    db.commit()
-
-# ==================== AUTH ENDPOINTS ====================
-@app.post("/api/auth/register", response_model=UserResponse, tags=["auth"])
+# ---------------- AUTH ROUTES ----------------
+@fastapi_app.post("/auth/register", response_model=UserResponse, tags=["auth"])
 def register(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.username == user.username).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="Username already registered")
+    if db.query(User).filter(User.username == user.username).first():
+        raise HTTPException(status_code=400, detail="Username already exists")
     
-    db_user = db.query(User).filter(User.email == user.email).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    if db.query(User).filter(User.email == user.email).first():
+        raise HTTPException(status_code=400, detail="Email already exists")
     
-    hashed_password = get_password_hash(user.password)
-    db_user = User(username=user.username, email=user.email, hashed_password=hashed_password, is_admin=user.is_admin)
+    db_user = User(
+        username=user.username,
+        email=user.email,
+        hashed_password=AppHelpers.get_password_hash(user.password),
+        is_admin=user.is_admin
+    )
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
     return db_user
 
-@app.post("/api/auth/login", response_model=Token, tags=["auth"])
-def login(username: str, password: str, db: Session = Depends(get_db)):
+@fastapi_app.post("/auth/login", response_model=Token, tags=["auth"])
+def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
-    if not user or not verify_password(password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    if not user or not AppHelpers.verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+    token = AppHelpers.create_access_token({"sub": user.username})
+    return {"access_token": token, "token_type": "bearer"}
 
-@app.get("/api/auth/me", response_model=UserResponse, tags=["auth"])
-def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
+@fastapi_app.get("/auth/me", response_model=UserResponse, tags=["auth"])
+def get_me(user: User = Depends(get_current_user)):
+    return user
 
-# ==================== HOME PAGE ENDPOINTS ====================
-@app.get("/api/home", tags=["public"])
-def get_home_data(
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    species = db.query(AnimalSpecies).options(joinedload(AnimalSpecies.translations)).all()
-    news = db.query(News).options(joinedload(News.translations)).order_by(News.published_at.desc()).limit(6).all()
-    new_products = db.query(Product).options(
-        joinedload(Product.translations),
-        joinedload(Product.species).joinedload(AnimalSpecies.translations),
-        joinedload(Product.category).joinedload(ProductCategory.translations)
-    ).filter(Product.is_new == True).limit(8).all()
-    
-    # Apply language filter (returns AttrDict objects)
-    species_out = [apply_language_filter(s, lang) for s in species]
-    news_out = [apply_language_filter(n, lang) for n in news]
-    products_out = [apply_language_filter(p, lang) for p in new_products]
-    
-    # Also apply language to nested objects for products
-    for product in products_out:
-        # original product from DB had species/category as ORM; but here we replaced top-product with AttrDict.
-        # We need to fetch nested ORM objects from original DB result to apply translations,
-        # so instead, iterate zipped pairs of (orm, filtered)
-        pass
+# ---------------- PUBLIC ROUTES ----------------
+@fastapi_app.get("/home", tags=["public"])
+def home(lang: Optional[str] = None, db: Session = Depends(get_db)):
+    # Fetch new products
+    products = db.query(Product)\
+        .options(
+            joinedload(Product.translations), 
+            joinedload(Product.features).joinedload(ProductFeature.translations)
+        )\
+        .filter(Product.is_new == True)\
+        .limit(8).all()
 
-    # For nested translations we must map using original ORM results to avoid losing relationships.
-    # Build mapping by id from ORM query results:
-    product_map = {p.id: p for p in new_products}
-    for p_out in products_out:
-        orm_p = product_map.get(p_out.id)
-        if orm_p is not None:
-            if orm_p.species:
-                p_out.species = apply_language_filter(orm_p.species, lang)
-            else:
-                p_out.species = None
-            if orm_p.category:
-                p_out.category = apply_language_filter(orm_p.category, lang)
-            else:
-                p_out.category = None
+    # Fetch latest news
+    news = db.query(News)\
+        .options(
+            joinedload(News.translations), 
+            joinedload(News.author).joinedload(NewsAuthor.translations),
+            joinedload(News.features).joinedload(NewsFeatures.translations)
+        )\
+        .order_by(News.published_at.desc())\
+        .limit(6).all()
 
     return {
-        "animal_species": species_out,
-        "latest_news": news_out,
-        "new_products": products_out
+        "new_products": [AppHelpers.apply_language_filter(p, lang) for p in products],
+        "latest_news": [AppHelpers.apply_language_filter(n, lang) for n in news],
     }
 
-# ==================== ANIMAL SPECIES ENDPOINTS ====================
-@app.get("/api/species", response_model=List[AnimalSpeciesResponse], tags=["public"])
-def get_all_species(
-    skip: int = 0,
-    limit: int = 100,
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    species_list = db.query(AnimalSpecies).options(joinedload(AnimalSpecies.translations)).offset(skip).limit(limit).all()
-    return [apply_language_filter(s, lang) for s in species_list]
+# --- Types ---
+@fastapi_app.get("/types", tags=["public"])
+def list_types(lang: Optional[str] = None, db: Session = Depends(get_db)):
+    items = db.query(AnimalTypes).options(joinedload(AnimalTypes.translations)).all()
+    return [AppHelpers.apply_language_filter(i, lang) for i in items]
 
-@app.get("/api/species/{species_id}", response_model=AnimalSpeciesResponse, tags=["public"])
-def get_species_by_id(
-    species_id: int,
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    species = db.query(AnimalSpecies).options(joinedload(AnimalSpecies.translations)).filter(AnimalSpecies.id == species_id).first()
-    if not species:
-        raise HTTPException(status_code=404, detail="Species not found")
-    return apply_language_filter(species, lang)
+@fastapi_app.get("/types/{id}", tags=["public"])
+def get_type(id: int, lang: Optional[str] = None, db: Session = Depends(get_db)):
+    item = db.query(AnimalTypes)\
+        .options(joinedload(AnimalTypes.translations))\
+        .filter(AnimalTypes.id == id)\
+        .first()
+    if not item:
+        raise HTTPException(404, "Species not found")
+    return AppHelpers.apply_language_filter(item, lang)
 
-@app.post("/api/admin/species", response_model=AnimalSpeciesResponse, tags=["admin"], dependencies=[Depends(get_admin_user)])
-def create_species(species: AnimalSpeciesCreate, db: Session = Depends(get_db)):
-    species_data = species.dict(exclude={'translations'})
-    db_species = AnimalSpecies(**species_data)
-    db.add(db_species)
+# --- Categories ---
+@fastapi_app.get("/categories", tags=["public"])
+def list_categories(lang: Optional[str] = None, db: Session = Depends(get_db)):
+    items = db.query(ProductCategory).options(joinedload(ProductCategory.translations)).all()
+    return [AppHelpers.apply_language_filter(i, lang) for i in items]
+
+@fastapi_app.get("/categories/{id}", tags=["public"])
+def get_category(id: int, lang: Optional[str] = None, db: Session = Depends(get_db)):
+    item = db.query(ProductCategory)\
+        .options(joinedload(ProductCategory.translations))\
+        .filter(ProductCategory.id == id)\
+        .first()
+    if not item:
+        raise HTTPException(404, "Category not found")
+    return AppHelpers.apply_language_filter(item, lang)
+
+# --- Products ---
+@fastapi_app.get("/products", tags=["public"])
+def list_products(lang: Optional[str] = None, db: Session = Depends(get_db)):
+    items = db.query(Product)\
+        .options(
+            joinedload(Product.translations),
+            joinedload(Product.features).joinedload(ProductFeature.translations)
+        )\
+        .all()
+    return [AppHelpers.apply_language_filter(i, lang) for i in items]
+
+@fastapi_app.get("/products/{id}", tags=["public"])
+def get_product(id: int, lang: Optional[str] = None, db: Session = Depends(get_db)):
+    item = db.query(Product)\
+        .options(
+            joinedload(Product.translations), 
+            joinedload(Product.features).joinedload(ProductFeature.translations)
+        )\
+        .filter(Product.id == id)\
+        .first()
+    if not item:
+        raise HTTPException(404, "Product not found")
+    return AppHelpers.apply_language_filter(item, lang)
+
+# --- News ---
+@fastapi_app.get("/news", tags=["public"])
+def list_news(lang: Optional[str] = None, db: Session = Depends(get_db)):
+    items = db.query(News)\
+        .options(
+            joinedload(News.translations), 
+            joinedload(News.author).joinedload(NewsAuthor.translations),
+            joinedload(News.features).joinedload(NewsFeatures.translations)
+        )\
+        .all()
+    return [AppHelpers.apply_language_filter(i, lang) for i in items]
+
+@fastapi_app.get("/news/{id}", tags=["public"])
+def get_news_detail(id: int, lang: Optional[str] = None, db: Session = Depends(get_db)):
+    item = db.query(News)\
+        .options(
+            joinedload(News.translations), 
+            joinedload(News.author).joinedload(NewsAuthor.translations),
+            joinedload(News.features).joinedload(NewsFeatures.translations)
+        )\
+        .filter(News.id == id)\
+        .first()
+    if not item:
+        raise HTTPException(404, "News not found")
+    return AppHelpers.apply_language_filter(item, lang)
+
+# ---------------- ADMIN ROUTES ----------------
+# --- Types ---
+@fastapi_app.post("/admin/types", tags=["admin"])
+def create_type(data: AnimalTypesCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = AnimalTypes(name=data.name, image_url=data.image_url)
+    db.add(db_obj)
     db.commit()
-    db.refresh(db_species)
-    
-    # Save translations
-    if species.translations:
-        save_translations(db, db_species, species.translations, AnimalSpeciesTranslation, 'species_id')
-        db.refresh(db_species)
-    
-    return apply_language_filter(db_species, None)
+    db.refresh(db_obj)
+    AppHelpers.save_translations(db, db_obj, data.translations, AnimalTypesTranslation, "types_id")
+    return AppHelpers.apply_language_filter(db_obj)
 
-@app.put("/api/admin/species/{species_id}", response_model=AnimalSpeciesResponse, tags=["admin"], dependencies=[Depends(get_admin_user)])
-def update_species(species_id: int, species: AnimalSpeciesCreate, db: Session = Depends(get_db)):
-    db_species = db.query(AnimalSpecies).filter(AnimalSpecies.id == species_id).first()
-    if not db_species:
-        raise HTTPException(status_code=404, detail="Species not found")
+@fastapi_app.put("/admin/types/{id}", tags=["admin"])
+def update_type(id: int, data: AnimalTypesUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(AnimalTypes, id)
+    if not db_obj:
+        raise HTTPException(404, "Not found")
     
-    species_data = species.dict(exclude={'translations'})
-    for key, value in species_data.items():
-        setattr(db_species, key, value)
+    if data.name: 
+        db_obj.name = data.name
+    if data.image_url: 
+        db_obj.image_url = data.image_url
     
     db.commit()
+    if data.translations:
+        AppHelpers.save_translations(db, db_obj, data.translations, AnimalTypesTranslation, "types_id")
     
-    # Update translations
-    if species.translations:
-        save_translations(db, db_species, species.translations, AnimalSpeciesTranslation, 'species_id')
-    
-    db.refresh(db_species)
-    return apply_language_filter(db_species, None)
+    return AppHelpers.apply_language_filter(db_obj)
 
-@app.delete("/api/admin/species/{species_id}", tags=["admin"], dependencies=[Depends(get_admin_user)])
-def delete_species(species_id: int, db: Session = Depends(get_db)):
-    db_species = db.query(AnimalSpecies).filter(AnimalSpecies.id == species_id).first()
-    if not db_species:
-        raise HTTPException(status_code=404, detail="Species not found")
-    db.delete(db_species)
+@fastapi_app.delete("/admin/types/{id}", tags=["admin"])
+def delete_type(id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(AnimalTypes, id)
+    if not db_obj: 
+        raise HTTPException(404, "Not found")
+    db.delete(db_obj)
     db.commit()
-    return {"message": "Species deleted successfully"}
+    return {"status": "deleted"}
 
-# ==================== PRODUCT CATEGORY ENDPOINTS ====================
-@app.get("/api/categories", response_model=List[ProductCategoryResponse], tags=["public"])
-def get_all_categories(
-    skip: int = 0,
-    limit: int = 100,
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    categories = db.query(ProductCategory).options(joinedload(ProductCategory.translations)).offset(skip).limit(limit).all()
-    return [apply_language_filter(c, lang) for c in categories]
-
-@app.post("/api/admin/categories", response_model=ProductCategoryResponse, tags=["admin"], dependencies=[Depends(get_admin_user)])
-def create_category(category: ProductCategoryCreate, db: Session = Depends(get_db)):
-    category_data = category.dict(exclude={'translations'})
-    db_category = ProductCategory(**category_data)
-    db.add(db_category)
+# --- Categories ---
+@fastapi_app.post("/admin/categories", tags=["admin"])
+def create_category(data: ProductCategoryCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = ProductCategory(name=data.name)
+    db.add(db_obj)
     db.commit()
-    db.refresh(db_category)
-    
-    # Save translations
-    if category.translations:
-        save_translations(db, db_category, category.translations, ProductCategoryTranslation, 'category_id')
-        db.refresh(db_category)
-    
-    return apply_language_filter(db_category, None)
+    db.refresh(db_obj)
+    AppHelpers.save_translations(db, db_obj, data.translations, ProductCategoryTranslation, "category_id")
+    return AppHelpers.apply_language_filter(db_obj)
 
-@app.put("/api/admin/categories/{category_id}", response_model=ProductCategoryResponse, tags=["admin"], dependencies=[Depends(get_admin_user)])
-def update_category(category_id: int, category: ProductCategoryCreate, db: Session = Depends(get_db)):
-    db_category = db.query(ProductCategory).filter(ProductCategory.id == category_id).first()
-    if not db_category:
-        raise HTTPException(status_code=404, detail="Category not found")
+@fastapi_app.put("/admin/categories/{id}", tags=["admin"])
+def update_category(id: int, data: ProductCategoryUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(ProductCategory, id)
+    if not db_obj: 
+        raise HTTPException(404, "Not found")
     
-    category_data = category.dict(exclude={'translations'})
-    for key, value in category_data.items():
-        setattr(db_category, key, value)
-    
+    if data.name: 
+        db_obj.name = data.name
     db.commit()
     
-    # Update translations
-    if category.translations:
-        save_translations(db, db_category, category.translations, ProductCategoryTranslation, 'category_id')
-    
-    db.refresh(db_category)
-    return apply_language_filter(db_category, None)
+    if data.translations:
+        AppHelpers.save_translations(db, db_obj, data.translations, ProductCategoryTranslation, "category_id")
+    return AppHelpers.apply_language_filter(db_obj)
 
-@app.delete("/api/admin/categories/{category_id}", tags=["admin"], dependencies=[Depends(get_admin_user)])
-def delete_category(category_id: int, db: Session = Depends(get_db)):
-    db_category = db.query(ProductCategory).filter(ProductCategory.id == category_id).first()
-    if not db_category:
-        raise HTTPException(status_code=404, detail="Category not found")
-    db.delete(db_category)
+@fastapi_app.delete("/admin/categories/{id}", tags=["admin"])
+def delete_category(id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(ProductCategory, id)
+    if not db_obj: 
+        raise HTTPException(404, "Not found")
+    db.delete(db_obj)
     db.commit()
-    return {"message": "Category deleted successfully"}
+    return {"status": "deleted"}
 
-# ==================== PRODUCT ENDPOINTS ====================
-@app.get("/api/products", response_model=List[ProductResponse], tags=["public"])
-def get_all_products(
-    skip: int = 0,
-    limit: int = 100,
-    species_id: Optional[int] = None,
-    category_id: Optional[int] = None,
-    is_new: Optional[bool] = None,
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
-    search: Optional[str] = None,
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    query = db.query(Product).options(
-        joinedload(Product.translations),
-        joinedload(Product.species).joinedload(AnimalSpecies.translations),
-        joinedload(Product.category).joinedload(ProductCategory.translations)
+# --- Products ---
+@fastapi_app.post("/admin/products", tags=["admin"])
+def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    # 1. Create Product (price, types_id, category_id can be None)
+    new_product = Product(
+        name=product_in.name,
+        price=product_in.price,
+        stock=product_in.stock,
+        manufacturer=product_in.manufacturer,
+        image_url=product_in.image_url,
+        is_new=product_in.is_new,
+        types_id=product_in.types_id,
+        category_id=product_in.category_id
     )
-    
-    if species_id:
-        query = query.filter(Product.species_id == species_id)
-    if category_id:
-        query = query.filter(Product.category_id == category_id)
-    if is_new is not None:
-        query = query.filter(Product.is_new == is_new)
-    if min_price is not None:
-        query = query.filter(Product.price >= min_price)
-    if max_price is not None:
-        query = query.filter(Product.price <= max_price)
-    if search:
-        query = query.filter(Product.name.contains(search))
-    
-    products_orm = query.offset(skip).limit(limit).all()
-    
-    # Apply language filter and nested translations
-    result = []
-    for orm_p in products_orm:
-        p_out = apply_language_filter(orm_p, lang)
-        # nested species/category from ORM
-        if orm_p.species:
-            p_out.species = apply_language_filter(orm_p.species, lang)
-        else:
-            p_out.species = None
-        if orm_p.category:
-            p_out.category = apply_language_filter(orm_p.category, lang)
-        else:
-            p_out.category = None
-        result.append(p_out)
-    
-    return result
+    db.add(new_product)
+    db.flush()  # Populates new_product.id
 
-@app.get("/api/products/new", response_model=List[ProductResponse], tags=["public"])
-def get_new_products(
-    skip: int = 0,
-    limit: int = 20,
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    products_orm = db.query(Product).options(
-        joinedload(Product.translations),
-        joinedload(Product.species).joinedload(AnimalSpecies.translations),
-        joinedload(Product.category).joinedload(ProductCategory.translations)
-    ).filter(Product.is_new == True).offset(skip).limit(limit).all()
-    
-    result = []
-    for orm_p in products_orm:
-        p_out = apply_language_filter(orm_p, lang)
-        if orm_p.species:
-            p_out.species = apply_language_filter(orm_p.species, lang)
-        else:
-            p_out.species = None
-        if orm_p.category:
-            p_out.category = apply_language_filter(orm_p.category, lang)
-        else:
-            p_out.category = None
-        result.append(p_out)
-    
-    return result
+    # 2. Add Translations
+    for lang, trans_data in product_in.translations.items():
+        db.add(ProductTranslation(
+            product_id=new_product.id,
+            language=lang,
+            name=trans_data.name,
+            description=trans_data.description
+        ))
 
-@app.get("/api/products/{product_id}", response_model=ProductResponse, tags=["public"])
-def get_product_by_id(
-    product_id: int,
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    orm_product = db.query(Product).options(
-        joinedload(Product.translations),
-        joinedload(Product.species).joinedload(AnimalSpecies.translations),
-        joinedload(Product.category).joinedload(ProductCategory.translations)
-    ).filter(Product.id == product_id).first()
-    
-    if not orm_product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    
-    p_out = apply_language_filter(orm_product, lang)
-    if orm_product.species:
-        p_out.species = apply_language_filter(orm_product.species, lang)
-    else:
-        p_out.species = None
-    if orm_product.category:
-        p_out.category = apply_language_filter(orm_product.category, lang)
-    else:
-        p_out.category = None
-    
-    return p_out
+    # 3. Add Features
+    for feature_in in product_in.features:
+        new_feature = ProductFeature(
+            product_id=new_product.id,
+            title=feature_in.title
+        )
+        db.add(new_feature)
+        db.flush()
 
-@app.post("/api/admin/products", response_model=ProductResponse, tags=["admin"], dependencies=[Depends(get_admin_user)])
-def create_product(product: ProductCreate, db: Session = Depends(get_db)):
-    product_data = product.dict(exclude={'translations'})
-    db_product = Product(**product_data)
-    db.add(db_product)
+        for lang, f_trans in feature_in.translations.items():
+            db.add(ProductFeatureTranslation(
+                feature_id=new_feature.id,
+                language=lang,
+                title=f_trans.title,
+                description=f_trans.description
+            ))
+
     db.commit()
-    db.refresh(db_product)
-    
-    # Save translations
-    if product.translations:
-        save_translations(db, db_product, product.translations, ProductTranslation, 'product_id')
-        db.refresh(db_product)
-    
-    # Return serializable object
-    p_out = apply_language_filter(db_product, None)
-    # add nested relations if exist
-    if db_product.species:
-        p_out.species = apply_language_filter(db_product.species, None)
-    else:
-        p_out.species = None
-    if db_product.category:
-        p_out.category = apply_language_filter(db_product.category, None)
-    else:
-        p_out.category = None
-    return p_out
+    db.refresh(new_product)
+    return AppHelpers.apply_language_filter(new_product)
 
-@app.put("/api/admin/products/{product_id}", response_model=ProductResponse, tags=["admin"], dependencies=[Depends(get_admin_user)])
-def update_product(product_id: int, product: ProductUpdate, db: Session = Depends(get_db)):
-    db_product = db.query(Product).filter(Product.id == product_id).first()
-    if not db_product:
-        raise HTTPException(status_code=404, detail="Product not found")
+@fastapi_app.put("/admin/products/{id}", tags=["admin"])
+def update_product(id: int, data: ProductUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(Product, id)
+    if not db_obj: 
+        raise HTTPException(404, "Not found")
     
-    product_data = product.dict(exclude_unset=True, exclude={'translations'})
-    for key, value in product_data.items():
-        setattr(db_product, key, value)
+    update_data = data.dict(exclude={"translations"}, exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_obj, key, value)
     
     db.commit()
-    
-    # Update translations
-    if product.translations:
-        save_translations(db, db_product, product.translations, ProductTranslation, 'product_id')
-    
-    db.refresh(db_product)
-    p_out = apply_language_filter(db_product, None)
-    if db_product.species:
-        p_out.species = apply_language_filter(db_product.species, None)
-    else:
-        p_out.species = None
-    if db_product.category:
-        p_out.category = apply_language_filter(db_product.category, None)
-    else:
-        p_out.category = None
-    return p_out
+    if data.translations:
+        AppHelpers.save_translations(db, db_obj, data.translations, ProductTranslation, "product_id")
+        
+    return AppHelpers.apply_language_filter(db_obj)
 
-@app.delete("/api/admin/products/{product_id}", tags=["admin"], dependencies=[Depends(get_admin_user)])
-def delete_product(product_id: int, db: Session = Depends(get_db)):
-    db_product = db.query(Product).filter(Product.id == product_id).first()
-    if not db_product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    db.delete(db_product)
+@fastapi_app.delete("/admin/products/{id}", tags=["admin"])
+def delete_product(id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(Product, id)
+    if not db_obj: 
+        raise HTTPException(404, "Not found")
+    db.delete(db_obj)
     db.commit()
-    return {"message": "Product deleted successfully"}
+    return {"status": "deleted"}
 
-# ==================== NEWS ENDPOINTS ====================
-@app.get("/api/news", response_model=List[NewsResponse], tags=["public"])
-def get_all_news(
-    skip: int = 0,
-    limit: int = 100,
-    search: Optional[str] = None,
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    query = db.query(News).options(joinedload(News.translations)).order_by(News.published_at.desc())
-    
-    if search:
-        query = query.filter(News.title.contains(search) | News.content.contains(search))
-    
-    news_list = query.offset(skip).limit(limit).all()
-    return [apply_language_filter(n, lang) for n in news_list]
-
-@app.get("/api/news/{news_id}", response_model=NewsResponse, tags=["public"])
-def get_news_by_id(
-    news_id: int,
-    lang: Optional[str] = Query(None, description="Language code: en, ru, hy"),
-    db: Session = Depends(get_db)
-):
-    news = db.query(News).options(joinedload(News.translations)).filter(News.id == news_id).first()
-    if not news:
-        raise HTTPException(status_code=404, detail="News not found")
-    return apply_language_filter(news, lang)
-
-@app.post("/api/admin/news", response_model=NewsResponse, tags=["admin"], dependencies=[Depends(get_admin_user)])
-def create_news(news: NewsCreate, db: Session = Depends(get_db)):
-    news_data = news.dict(exclude={'translations'})
-    db_news = News(**news_data)
-    db.add(db_news)
+# --- News ---
+@fastapi_app.post("/admin/news", tags=["admin"])
+def create_news(data: NewsCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    # Core News
+    db_obj = News(title=data.title, image_url=data.image_url, author_id=data.author_id)
+    db.add(db_obj)
     db.commit()
-    db.refresh(db_news)
-    
-    # Save translations
-    if news.translations:
-        save_translations(db, db_news, news.translations, NewsTranslation, 'news_id')
-        db.refresh(db_news)
-    
-    return apply_language_filter(db_news, None)
+    db.refresh(db_obj)
 
-@app.put("/api/admin/news/{news_id}", response_model=NewsResponse, tags=["admin"], dependencies=[Depends(get_admin_user)])
-def update_news(news_id: int, news: NewsUpdate, db: Session = Depends(get_db)):
-    db_news = db.query(News).filter(News.id == news_id).first()
-    if not db_news:
-        raise HTTPException(status_code=404, detail="News not found")
+    # Translations
+    AppHelpers.save_translations(db, db_obj, data.translations, NewsTranslation, "news_id")
     
-    news_data = news.dict(exclude_unset=True, exclude={'translations'})
-    for key, value in news_data.items():
-        setattr(db_news, key, value)
+    # Features (if any)
+    if data.features:
+        for feat in data.features:
+            db_feat = NewsFeatures(news_id=db_obj.id, title=feat.get("title", ""))
+            db.add(db_feat)
+            db.commit()
+            db.refresh(db_feat)
+            AppHelpers.save_translations(db, db_feat, feat.get("translations", {}), NewsFeaturesTranslation, "feature_id")
+
+    return AppHelpers.apply_language_filter(db_obj)
+
+@fastapi_app.put("/admin/news/{id}", tags=["admin"])
+def update_news(id: int, data: NewsUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(News, id)
+    if not db_obj: 
+        raise HTTPException(404, "Not found")
+    
+    if data.title: 
+        db_obj.title = data.title
+    if data.image_url: 
+        db_obj.image_url = data.image_url
+    if data.author_id: 
+        db_obj.author_id = data.author_id
     
     db.commit()
-    
-    # Update translations
-    if news.translations:
-        save_translations(db, db_news, news.translations, NewsTranslation, 'news_id')
-    
-    db.refresh(db_news)
-    return apply_language_filter(db_news, None)
+    if data.translations:
+        AppHelpers.save_translations(db, db_obj, data.translations, NewsTranslation, "news_id")
+        
+    return AppHelpers.apply_language_filter(db_obj)
 
-@app.delete("/api/admin/news/{news_id}", tags=["admin"], dependencies=[Depends(get_admin_user)])
-def delete_news(news_id: int, db: Session = Depends(get_db)):
-    db_news = db.query(News).filter(News.id == news_id).first()
-    if not db_news:
-        raise HTTPException(status_code=404, detail="News not found")
-    db.delete(db_news)
+@fastapi_app.delete("/admin/news/{id}", tags=["admin"])
+def delete_news(id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(News, id)
+    if not db_obj: 
+        raise HTTPException(404, "Not found")
+    db.delete(db_obj)
     db.commit()
-    return {"message": "News deleted successfully"}
+    return {"status": "deleted"}
 
-# ==================== STATISTICS ENDPOINTS ====================
-@app.get("/api/admin/statistics", tags=["admin"], dependencies=[Depends(get_admin_user)])
-def get_statistics(db: Session = Depends(get_db)):
+@fastapi_app.get("/admin/statistics", tags=["admin"])
+def statistics(db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     return {
-        "total_products": db.query(Product).count(),
-        "total_species": db.query(AnimalSpecies).count(),
+        "total_users": db.query(User).count(),
+        "total_types": db.query(AnimalTypes).count(),
         "total_categories": db.query(ProductCategory).count(),
+        "total_products": db.query(Product).count(),
         "total_news": db.query(News).count(),
-        "new_products": db.query(Product).filter(Product.is_new == True).count()
     }
-
-# Root endpoint
-@app.get("/", tags=["public"])
-def root():
-    return {
-        "message": "Animal Store API with Multi-Language Support",
-        "version": "2.0.0",
-        "docs": "/docs",
-        "supported_languages": ["en", "ru", "hy"]
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
