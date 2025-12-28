@@ -67,26 +67,49 @@ class AppHelpers:
         if not translations_dict:
             return
             
-        # Clear existing translations
-        existing = db.query(ModelClass).filter(getattr(ModelClass, fk_field_name) == db_obj.id).all()
-        for item in existing:
-            db.delete(item)
-        
+        # Load existing translations keyed by language value
+        existing_q = db.query(ModelClass).filter(getattr(ModelClass, fk_field_name) == db_obj.id)
+        existing = {getattr(t.language, "value", t.language): t for t in existing_q.all()}
+
+        incoming_langs = []
+
         for lang_code, data in translations_dict.items():
-            # Validate language enum
+            # Validate/normalize language code
             try:
                 language = LanguageEnum(lang_code)
             except ValueError:
-                continue  # Skip invalid language codes
-                
-            # Create translation record
-            trans_obj = ModelClass(
-                language=language,
-                **data
-            )
-            # Set the foreign key dynamically (e.g., product_id = db_obj.id)
-            setattr(trans_obj, fk_field_name, db_obj.id)
-            db.add(trans_obj)
+                # skip invalid language
+                continue
+
+            # Normalize data: accept dicts or pydantic models
+            if hasattr(data, "dict") and callable(getattr(data, "dict")):
+                data_map = data.dict()
+            elif isinstance(data, dict):
+                data_map = data
+            else:
+                try:
+                    data_map = dict(data)
+                except Exception:
+                    data_map = {}
+
+            incoming_langs.append(language.value)
+
+            if language.value in existing:
+                # update existing translation
+                trans_obj = existing[language.value]
+                for k, v in data_map.items():
+                    setattr(trans_obj, k, v)
+            else:
+                # create new translation
+                trans_obj = ModelClass(language=language, **data_map)
+                setattr(trans_obj, fk_field_name, db_obj.id)
+                db.add(trans_obj)
+
+        # Delete translations that are not in incoming set
+        for lang_val, trans_obj in existing.items():
+            if lang_val not in incoming_langs:
+                db.delete(trans_obj)
+
         db.commit()
 
     @staticmethod

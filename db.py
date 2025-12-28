@@ -1,15 +1,16 @@
-from datetime import datetime
 import enum
+from datetime import datetime
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Text,
     DateTime, ForeignKey, Boolean, Enum as SQLEnum,
     UniqueConstraint
 )
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
-from pydantic import BaseModel as PydanticBaseModel
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from typing import Optional, Dict, List
+from pydantic import BaseModel as PydanticBaseModel
+
 
 # Assuming config is in a separate file, or define basic config here
 try:
@@ -73,7 +74,6 @@ class ProductCategory(Base):
     __tablename__ = "product_categories"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255))  # Fallback name
-    
     translations = relationship("ProductCategoryTranslation", back_populates="category", cascade="all, delete-orphan")
 
 class ProductCategoryTranslation(Base):
@@ -82,10 +82,30 @@ class ProductCategoryTranslation(Base):
     id = Column(Integer, primary_key=True, index=True)
     category_id = Column(Integer, ForeignKey("product_categories.id", ondelete="CASCADE"), nullable=False)
     language = Column(SQLEnum(LanguageEnum), nullable=False)
-    name = Column(String(255))
-    description = Column(Text, nullable=True)
+    name = Column(String(255))    
     
+    # Relationship back to category
     category = relationship("ProductCategory", back_populates="translations")
+
+class ProductSubcategory(Base):
+    __tablename__ = "product_subcategories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    category_id = Column(Integer, ForeignKey("product_categories.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255))  # Fallback name
+    translations = relationship("ProductSubcategoryTranslation", back_populates="subcategory", cascade="all, delete-orphan")
+
+
+class ProductSubcategoryTranslation(Base):
+    __tablename__ = "product_subcategories_translations"
+    __table_args__ = (UniqueConstraint("subcategory_id", "language"),)
+    id = Column(Integer, primary_key=True, index=True)
+    subcategory_id = Column(Integer, ForeignKey("product_subcategories.id", ondelete="CASCADE"), nullable=False)
+    language = Column(SQLEnum(LanguageEnum), nullable=False)
+    name = Column(String(255))    
+    
+    # Relationship back to subcategory
+    subcategory = relationship("ProductSubcategory", back_populates="translations")
 
 # --- Product Models ---
 class Product(Base):
@@ -102,7 +122,8 @@ class Product(Base):
     # Foreign Keys
     types_id = Column(Integer, ForeignKey("animal_types.id", ondelete="SET NULL"), nullable=True)
     category_id = Column(Integer, ForeignKey("product_categories.id", ondelete="SET NULL"), nullable=True)
-
+    subcategory_id = Column(Integer, ForeignKey("product_subcategories.id", ondelete="SET NULL"), nullable=True)
+    
     translations = relationship("ProductTranslation", back_populates="product", cascade="all, delete-orphan")
     features = relationship("ProductFeature", back_populates="product", cascade="all, delete-orphan")
 
@@ -179,7 +200,7 @@ class NewsTranslation(Base):
     news_id = Column(Integer, ForeignKey("news.id", ondelete="CASCADE"), nullable=False)
     language = Column(SQLEnum(LanguageEnum), nullable=False)
     title = Column(String(300), nullable=False)
-    summary = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
     news = relationship("News", back_populates="translations")
 
 class NewsFeatures(Base):
@@ -253,27 +274,181 @@ class ProductCreate(PydanticBaseModel):
     is_new: bool = False
     types_id: Optional[int] = None
     category_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
     translations: Dict[str, Dict[str, str]]
     features: Optional[List[Dict[str, str]]] = []
 
 class ProductUpdate(PydanticBaseModel):
-    name: Optional[str] = None
+    name: str
     price: Optional[float] = None
-    stock: Optional[int] = None
+    stock: int = 0
     manufacturer: Optional[str] = None
     image_url: Optional[str] = None
-    translations: Optional[Dict[str, Dict[str, str]]] = None
+    is_new: bool = False
+    types_id: Optional[int] = None
+    category_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
+    translations: Dict[str, Dict[str, str]]
+    features: Optional[List[Dict[str, str]]] = []
 
 # --- News ---
+class NewsFeatureCreate(PydanticBaseModel):
+    title: str
+    translations: Dict[str, Dict[str, str]]
+
 class NewsCreate(PydanticBaseModel):
-    title: str  # Fallback
     image_url: Optional[str] = None
     author_id: Optional[int] = None
     translations: Dict[str, Dict[str, str]]
     features: Optional[List[Dict[str, str]]] = []
+
 
 class NewsUpdate(PydanticBaseModel):
     title: Optional[str] = None
     image_url: Optional[str] = None
     author_id: Optional[int] = None
+    image_url: Optional[str] = None
     translations: Optional[Dict[str, Dict[str, str]]] = None
+
+
+
+
+# CREATE TABLE products (
+#     id SERIAL PRIMARY KEY,
+#     name VARCHAR(255) NOT NULL,
+#     price FLOAT,
+#     stock INTEGER DEFAULT 0,
+#     manufacturer VARCHAR(255),
+#     image_url VARCHAR(500),
+#     is_new BOOLEAN DEFAULT FALSE,
+#     created_at TIMESTAMP DEFAULT now(),
+#     types_id INTEGER REFERENCES animal_types(id) ON DELETE SET NULL,
+#     category_id INTEGER REFERENCES product_categories(id) ON DELETE SET NULL
+# );
+
+# CREATE TABLE product_translations (
+#     id SERIAL PRIMARY KEY,
+#     product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+#     language languageenum NOT NULL,
+#     name VARCHAR(255),
+#     description TEXT,
+#     UNIQUE (product_id, language)
+# );
+
+# CREATE TABLE product_features (
+#     id SERIAL PRIMARY KEY,
+#     product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+#     title VARCHAR(255)
+# );
+
+# CREATE TABLE product_features_translations (
+#     id SERIAL PRIMARY KEY,
+#     feature_id INTEGER REFERENCES product_features(id) ON DELETE CASCADE,
+#     language languageenum NOT NULL,
+#     title VARCHAR(255),
+#     description TEXT,
+#     UNIQUE (feature_id, language)
+# );
+
+
+
+
+# CREATE TABLE news_authors (
+#     id SERIAL PRIMARY KEY,
+#     name VARCHAR(200) NOT NULL,
+#     image_url VARCHAR(500)
+# );
+
+# CREATE TABLE news_author_translations (
+#     id SERIAL PRIMARY KEY,
+#     author_id INTEGER NOT NULL REFERENCES news_authors(id) ON DELETE CASCADE,
+#     language languageenum NOT NULL,
+#     name VARCHAR(200) NOT NULL,
+#     position VARCHAR(200),
+#     bio TEXT,
+#     UNIQUE (author_id, language)
+# );
+
+
+
+
+# CREATE TABLE news (
+#     id SERIAL PRIMARY KEY,
+#     title VARCHAR(300),
+#     image_url VARCHAR(500),
+#     author_id INTEGER REFERENCES news_authors(id) ON DELETE SET NULL,
+#     published_at TIMESTAMPTZ DEFAULT now(),
+#     created_at TIMESTAMPTZ DEFAULT now(),
+#     updated_at TIMESTAMPTZ DEFAULT now()
+# );
+
+# CREATE TABLE news_translations (
+#     id SERIAL PRIMARY KEY,
+#     news_id INTEGER NOT NULL REFERENCES news(id) ON DELETE CASCADE,
+#     language languageenum NOT NULL,
+#     title VARCHAR(300) NOT NULL,
+#     summary TEXT,
+#     UNIQUE (news_id, language)
+# );
+
+# CREATE TABLE news_features (
+#     id SERIAL PRIMARY KEY,
+#     news_id INTEGER NOT NULL REFERENCES news(id) ON DELETE CASCADE,
+#     title VARCHAR(300) NOT NULL
+# );
+
+# CREATE TABLE news_features_translations (
+#     id SERIAL PRIMARY KEY,
+#     feature_id INTEGER NOT NULL REFERENCES news_features(id) ON DELETE CASCADE,
+#     language languageenum NOT NULL,
+#     title VARCHAR(300) NOT NULL,
+#     description TEXT,
+#     UNIQUE (feature_id, language)
+# );
+
+
+
+
+
+# {
+#   "title": "Կարմիր տզերի վտանգի մասին նախազգուշացում",
+#   "content": "Թռչնամսի արտադրողներին կոչ է արվում զգույշ լինել կարմիր տզերի բռնկումներից ...",
+#   "summary": "Կարմիր տզերը կարող են վնասել թռչունների առողջությունը և արտադրողականությունը, հատկապես փակ տարածքներում։",
+#   "image_url": "https://example.com/news_image.jpg",
+#   "author_id": 1,
+#   "published_at": "2025-12-26T12:06:43.149Z",
+#   "translations": {
+#     "hy": {
+#       "title": "Կարմիր տզերի վտանգի մասին նախազգուշացում",
+#       "content": "Թռչնամսի արտադրողներին կոչ է արվում զգույշ լինել կարմիր տզերի բռնկումներից ...",
+#       "summary": "Կարմիր տզերը կարող են վնասել թռչունների առողջությունը և արտադրողականությունը, հատկապես փակ տարածքներում։"
+#     },
+#     "ru": {
+#       "title": "Предупреждение об угрозе заражения красным клещом",
+#       "content": "Производителей птицы призывают внимательно следить за вспышками красного клеща ...",
+#       "summary": "Красный клещ может навредить здоровью и продуктивности птиц, особенно в закрытых помещениях."
+#     },
+#     "en": {
+#       "title": "Red mite threat warning during bird flu housing order",
+#       "content": "Poultry producers are being urged to watch out for red mite outbreaks ...",
+#       "summary": "Red mites can harm bird health and productivity, especially in confined indoor spaces."
+#     }
+#   },
+#   "features": [
+#     {
+#       "title": "Կարմիր տզերի ախտանիշները",
+#       "description": "Կարմիր տզից վարակված թռչունները կարող են ցուցաբերել անհանգստություն ...",
+#       "translations": "{\"hy\":{\"title\":\"Կարմիր տզերի ախտանիշները\",\"description\":\"Կարմիր տզից վարակված թռչունները կարող են ցուցաբերել անհանգստություն ...\"},\"ru\":{\"title\":\"Симптомы красного клеща\",\"description\":\"У птиц, поражённых красным клещом, могут наблюдаться беспокойство ...\"},\"en\":{\"title\":\"Red mite symptoms\",\"description\":\"Birds affected by red mite can display restlessness ...\"}}"
+#     },
+#     {
+#       "title": "Կարմիր տզերի թակարդներ",
+#       "description": "Արտադրողները կարող են ստեղծել իրենց սեփական պարզ կարմիր տզերի թակարդները ...",
+#       "translations": "{\"hy\":{\"title\":\"Կարմիր տզերի թակարդներ\",\"description\":\"Արտադրողները կարող են ստեղծել իրենց սեփական պարզ կարմիր տզերի թակարդները ...\"},\"ru\":{\"title\":\"Ловушки для красного клеща\",\"description\":\"Фермеры могут изготовить простые ловушки ...\"},\"en\":{\"title\":\"Red mite traps\",\"description\":\"Producers can create their own simple red mite traps ...\"}}"
+#     },
+#     {
+#       "title": "Կենսաանվտանգություն",
+#       "description": "Մոնիթորինգին զուգահեռ, կարևոր են կանխարգելիչ կենսաբանական անվտանգության միջոցառումները ...",
+#       "translations": "{\"hy\":{\"title\":\"Կենսաանվտանգություն\",\"description\":\"Մոնիթորինգին զուգահեռ, կարևոր են կանխարգելիչ կենսաբանական անվտանգության միջոցառումները ...\"},\"ru\":{\"title\":\"Биобезопасность\",\"description\":\"Наряду с мониторингом крайне важны превентивные меры ...\"},\"en\":{\"title\":\"Biosecurity\",\"description\":\"Alongside monitoring, proactive biosecurity measures are essential ...\"}}"
+#     }
+#   ]
+# }
