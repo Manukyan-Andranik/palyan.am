@@ -1,49 +1,24 @@
 import asyncio
-
 from typing import Optional, List
 from fastapi import FastAPI, HTTPException, Depends, status, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy import text
 
 from db import (
-    Base, engine, SessionLocal,
+    SessionLocal,
     User, UserCreate, UserResponse, Token,
     AnimalTypes, AnimalTypesCreate, AnimalTypesUpdate, AnimalTypesTranslation,
     ProductCategory, ProductCategoryCreate, ProductCategoryUpdate, ProductCategoryTranslation,
     ProductSubcategory, ProductSubcategoryCreate, ProductSubcategoryUpdate, ProductSubcategoryTranslation,
     Product, ProductCreate, ProductUpdate, ProductTranslation, 
     ProductFeature, ProductFeatureTranslation,
-    News, NewsCreate, NewsUpdate, NewsTranslation, NewsFeatures, NewsFeaturesTranslation, NewsAuthor
+    News, NewsCreate, NewsUpdate, NewsTranslation, NewsFeatures, NewsFeaturesTranslation, 
+    NewsAuthor, NewsAuthorTranslation,
+    NewsAuthorCreate, NewsAuthorUpdate
 )
 from helpers import AppHelpers
 import schemas
-
-# ---------------- INIT ----------------
-# Ensure tables exist
-# with engine.begin() as conn:
-#     # Drop all tables with CASCADE
-#     conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS animal_types CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS animal_types_translations CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS product_categories CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS product_categories_translations CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS products CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS product_translations CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS product_features CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS product_features_translations CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS news_authors CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS news_author_translations CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS news CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS news_translations CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS news_features CASCADE"))
-#     conn.execute(text("DROP TABLE IF EXISTS news_features_translations CASCADE"))
-
-# Base.metadata.create_all(bind=engine)
-
-from fastapi.middleware.cors import CORSMiddleware
 
 fastapi_app = FastAPI(
     title="Veterinary Pharmacy API",
@@ -63,11 +38,10 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
 )
 
-
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
-# ---------------- DEPENDENCIES ----------------
+# ==================== DEPENDENCIES ====================
+
 def get_db():
     db = SessionLocal()
     try:
@@ -83,7 +57,8 @@ def get_admin_user(user: User = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin privileges required")
     return user
 
-# ---------------- AUTH ROUTES ----------------
+# ==================== AUTH ROUTES ====================
+
 @fastapi_app.post("/auth/register", response_model=UserResponse, tags=["auth"])
 def register(user: UserCreate, db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == user.username).first():
@@ -116,7 +91,8 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
 def get_me(user: User = Depends(get_current_user)):
     return user
 
-# ---------------- PUBLIC ROUTES ----------------
+# ==================== PUBLIC ROUTES ====================
+
 @fastapi_app.get("/home", tags=["public"])
 def home(lang: Optional[str] = None, db: Session = Depends(get_db)):
     # Fetch new products
@@ -335,8 +311,8 @@ def get_news_detail(id: int, lang: Optional[str] = None, db: Session = Depends(g
         raise HTTPException(404, "News not found")
     return AppHelpers.apply_language_filter(item, lang)
 
-# ---------------- ADMIN ROUTES ----------------
-# --- Types ---
+# ==================== ADMIN ROUTES ====================
+
 @fastapi_app.post("/admin/types", tags=["admin"])
 def create_type(data: AnimalTypesCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     db_obj = AnimalTypes(name=data.name, image_url=data.image_url)
@@ -373,6 +349,7 @@ def delete_type(id: int, db: Session = Depends(get_db), _: User = Depends(get_ad
     return {"status": "deleted"}
 
 # --- Categories ---
+
 @fastapi_app.post("/admin/categories", tags=["admin"])
 def create_category(data: ProductCategoryCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     # Extract fallback name from multilingual dict
@@ -451,6 +428,7 @@ def delete_category(id: int, db: Session = Depends(get_db), _: User = Depends(ge
     return {"status": "deleted"}
 
 # --- Subcategories ---
+
 @fastapi_app.post("/admin/subcategories", tags=["admin"])
 def create_subcategory(data: ProductSubcategoryCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     # Verify category exists
@@ -501,6 +479,7 @@ def delete_subcategory(id: int, db: Session = Depends(get_db), _: User = Depends
     return {"status": "deleted"}
 
 # --- Products ---
+
 @fastapi_app.post("/admin/products", tags=["admin"])
 def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     # Extract name from multilingual dict (use first available value as fallback)
@@ -678,7 +657,83 @@ def delete_product(id: int, db: Session = Depends(get_db), _: User = Depends(get
     db.commit()
     return {"status": "deleted"}
 
-# --- News ---
+# ==================== NEWS AUTHORS ====================
+
+@fastapi_app.post("/admin/authors", tags=["admin"])
+def create_author(data: NewsAuthorCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    # Extract fallback name from multilingual dict
+    fallback_name = next(iter(data.name.values())) if data.name else ""
+    
+    # Create author
+    author_obj = NewsAuthor(name=fallback_name, image_url=data.image)
+    db.add(author_obj)
+    db.flush()
+    
+    # Add translations for name, bio, position
+    if data.name and isinstance(data.name, dict):
+        AppHelpers.save_translations(db, author_obj, data.name, NewsAuthorTranslation, "author_id", name_field="name")
+    
+    if data.bio and isinstance(data.bio, dict):
+        AppHelpers.save_translations(db, author_obj, data.bio, NewsAuthorTranslation, "author_id", name_field="bio")
+    
+    if data.position and isinstance(data.position, dict):
+        AppHelpers.save_translations(db, author_obj, data.position, NewsAuthorTranslation, "author_id", name_field="position")
+    
+    db.commit()
+    db.refresh(author_obj)
+    return AppHelpers.apply_language_filter(author_obj)
+
+
+@fastapi_app.put("/admin/authors/{id}", tags=["admin"])
+def update_author(id: int, data: NewsAuthorUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    author_obj = db.get(NewsAuthor, id)
+    if not author_obj:
+        raise HTTPException(404, "Author not found")
+    
+    # Update image if provided
+    if data.image:
+        author_obj.image_url = data.image
+    
+    # Update name if provided
+    if data.name and isinstance(data.name, dict):
+        fallback_name = next(iter(data.name.values())) if data.name else ""
+        author_obj.name = fallback_name
+        AppHelpers.save_translations(db, author_obj, data.name, NewsAuthorTranslation, "author_id", name_field="name")
+    
+    # Update bio if provided
+    if data.bio and isinstance(data.bio, dict):
+        AppHelpers.save_translations(db, author_obj, data.bio, NewsAuthorTranslation, "author_id", name_field="bio")
+    
+    # Update position if provided
+    if data.position and isinstance(data.position, dict):
+        AppHelpers.save_translations(db, author_obj, data.position, NewsAuthorTranslation, "author_id", name_field="position")
+    
+    db.commit()
+    db.refresh(author_obj)
+    return AppHelpers.apply_language_filter(author_obj)
+
+
+@fastapi_app.get("/admin/authors/{id}", tags=["admin"])
+def get_author(id: int, lang: Optional[str] = None, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    author_obj = db.query(NewsAuthor)\
+        .options(joinedload(NewsAuthor.translations))\
+        .filter(NewsAuthor.id == id)\
+        .first()
+    if not author_obj:
+        raise HTTPException(404, "Author not found")
+    return AppHelpers.apply_language_filter(author_obj, lang)
+
+
+@fastapi_app.delete("/admin/authors/{id}", tags=["admin"])
+def delete_author(id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    author_obj = db.get(NewsAuthor, id)
+    if not author_obj:
+        raise HTTPException(404, "Author not found")
+    db.delete(author_obj)
+    db.commit()
+    return {"status": "deleted"}
+
+# ==================== NEWS ====================
 
 @fastapi_app.post("/admin/news", tags=["admin"])
 def create_news(data: schemas.NewsCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
@@ -689,11 +744,39 @@ def create_news(data: schemas.NewsCreate, db: Session = Depends(get_db), _: User
     elif isinstance(data.name, str):
         fallback_name = data.name
     
+    # Handle author: Priority is "author" object > "author_id"
+    # If "author" object provided: create new author and use it
+    # Else if "author_id" provided: use existing author
+    # Else: news has no author (author_id is None)
+    author_id = None
+    
+    if data.author:
+        # Priority 1: Create new author from provided author object
+        author_fallback_name = next(iter(data.author.name.values())) if data.author.name else ""
+        author_obj = NewsAuthor(name=author_fallback_name, image_url=data.author.image)
+        db.add(author_obj)
+        db.flush()
+        
+        # Add author translations
+        if data.author.name and isinstance(data.author.name, dict):
+            AppHelpers.save_translations(db, author_obj, data.author.name, NewsAuthorTranslation, "author_id", name_field="name")
+        
+        if data.author.bio and isinstance(data.author.bio, dict):
+            AppHelpers.save_translations(db, author_obj, data.author.bio, NewsAuthorTranslation, "author_id", name_field="bio")
+        
+        if data.author.position and isinstance(data.author.position, dict):
+            AppHelpers.save_translations(db, author_obj, data.author.position, NewsAuthorTranslation, "author_id", name_field="position")
+        
+        author_id = author_obj.id
+    elif data.author_id:
+        # Priority 2: Use existing author by ID
+        author_id = data.author_id
+    
     # 1. Create core News
     news_obj = News(
         title=fallback_name,
         image_url=data.image_url,
-        author_id=data.author_id
+        author_id=author_id
     )
     db.add(news_obj)
     db.flush()  # Populate news_obj.id
@@ -750,11 +833,54 @@ def update_news(id: int, data: schemas.NewsUpdate, db: Session = Depends(get_db)
     if not db_obj:
         raise HTTPException(404, "Not found")
 
-    # Update scalar fields (excluding multilingual fields)
-    update_data = data.dict(exclude={"name", "description", "features"}, exclude_unset=True)
+    # Update scalar fields (excluding multilingual fields and author-related)
+    update_data = data.dict(exclude={"name", "description", "features", "author", "author_id"}, exclude_unset=True)
     for key, value in update_data.items():
         if value is not None:
             setattr(db_obj, key, value)
+
+    # Handle author: Priority is "author" object > "author_id"
+    # If "author" object provided: update existing author or create new one
+    # Else if "author_id" provided: switch to different author
+    # Else: leave author unchanged
+    if data.author:
+        # Priority 1: Update or create author from provided author object
+        if db_obj.author:
+            # Update existing author associated with this news
+            author_obj = db_obj.author
+            if data.author.image:
+                author_obj.image_url = data.author.image
+            
+            if data.author.name and isinstance(data.author.name, dict):
+                fallback_name = next(iter(data.author.name.values())) if data.author.name else ""
+                author_obj.name = fallback_name
+                AppHelpers.save_translations(db, author_obj, data.author.name, NewsAuthorTranslation, "author_id", name_field="name")
+            
+            if data.author.bio and isinstance(data.author.bio, dict):
+                AppHelpers.save_translations(db, author_obj, data.author.bio, NewsAuthorTranslation, "author_id", name_field="bio")
+            
+            if data.author.position and isinstance(data.author.position, dict):
+                AppHelpers.save_translations(db, author_obj, data.author.position, NewsAuthorTranslation, "author_id", name_field="position")
+        else:
+            # Create new author since news doesn't have one
+            author_fallback_name = next(iter(data.author.name.values())) if data.author.name else ""
+            author_obj = NewsAuthor(name=author_fallback_name, image_url=data.author.image)
+            db.add(author_obj)
+            db.flush()
+            
+            if data.author.name and isinstance(data.author.name, dict):
+                AppHelpers.save_translations(db, author_obj, data.author.name, NewsAuthorTranslation, "author_id", name_field="name")
+            
+            if data.author.bio and isinstance(data.author.bio, dict):
+                AppHelpers.save_translations(db, author_obj, data.author.bio, NewsAuthorTranslation, "author_id", name_field="bio")
+            
+            if data.author.position and isinstance(data.author.position, dict):
+                AppHelpers.save_translations(db, author_obj, data.author.position, NewsAuthorTranslation, "author_id", name_field="position")
+            
+            db_obj.author_id = author_obj.id
+    elif data.author_id is not None:
+        # Priority 2: Switch to different author by ID
+        db_obj.author_id = data.author_id
 
     # Handle name/title translations: if name dict provided, sync translations for NewsTranslation
     if data.name and isinstance(data.name, dict):
