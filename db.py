@@ -1,15 +1,16 @@
-from datetime import datetime
 import enum
+from datetime import datetime
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Text,
     DateTime, ForeignKey, Boolean, Enum as SQLEnum,
     UniqueConstraint
 )
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from typing import Optional, Dict, List, Any
 from pydantic import BaseModel as PydanticBaseModel
-from typing import Optional, Dict, List
+
 
 # Assuming config is in a separate file, or define basic config here
 try:
@@ -73,8 +74,9 @@ class ProductCategory(Base):
     __tablename__ = "product_categories"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255))  # Fallback name
-    
     translations = relationship("ProductCategoryTranslation", back_populates="category", cascade="all, delete-orphan")
+    # Relationship to subcategories
+    subcategories = relationship("ProductSubcategory", back_populates="category", cascade="all, delete-orphan")
 
 class ProductCategoryTranslation(Base):
     __tablename__ = "product_categories_translations"
@@ -82,10 +84,32 @@ class ProductCategoryTranslation(Base):
     id = Column(Integer, primary_key=True, index=True)
     category_id = Column(Integer, ForeignKey("product_categories.id", ondelete="CASCADE"), nullable=False)
     language = Column(SQLEnum(LanguageEnum), nullable=False)
-    name = Column(String(255))
-    description = Column(Text, nullable=True)
+    name = Column(String(255))    
     
+    # Relationship back to category
     category = relationship("ProductCategory", back_populates="translations")
+
+class ProductSubcategory(Base):
+    __tablename__ = "product_subcategories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    category_id = Column(Integer, ForeignKey("product_categories.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255))  # Fallback name
+    translations = relationship("ProductSubcategoryTranslation", back_populates="subcategory", cascade="all, delete-orphan")
+    # Relationship back to category
+    category = relationship("ProductCategory", back_populates="subcategories")
+
+
+class ProductSubcategoryTranslation(Base):
+    __tablename__ = "product_subcategories_translations"
+    __table_args__ = (UniqueConstraint("subcategory_id", "language"),)
+    id = Column(Integer, primary_key=True, index=True)
+    subcategory_id = Column(Integer, ForeignKey("product_subcategories.id", ondelete="CASCADE"), nullable=False)
+    language = Column(SQLEnum(LanguageEnum), nullable=False)
+    name = Column(String(255))    
+    
+    # Relationship back to subcategory
+    subcategory = relationship("ProductSubcategory", back_populates="translations")
 
 # --- Product Models ---
 class Product(Base):
@@ -102,7 +126,8 @@ class Product(Base):
     # Foreign Keys
     types_id = Column(Integer, ForeignKey("animal_types.id", ondelete="SET NULL"), nullable=True)
     category_id = Column(Integer, ForeignKey("product_categories.id", ondelete="SET NULL"), nullable=True)
-
+    subcategory_id = Column(Integer, ForeignKey("product_subcategories.id", ondelete="SET NULL"), nullable=True)
+    
     translations = relationship("ProductTranslation", back_populates="product", cascade="all, delete-orphan")
     features = relationship("ProductFeature", back_populates="product", cascade="all, delete-orphan")
 
@@ -179,7 +204,7 @@ class NewsTranslation(Base):
     news_id = Column(Integer, ForeignKey("news.id", ondelete="CASCADE"), nullable=False)
     language = Column(SQLEnum(LanguageEnum), nullable=False)
     title = Column(String(300), nullable=False)
-    summary = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
     news = relationship("News", back_populates="translations")
 
 class NewsFeatures(Base):
@@ -236,16 +261,23 @@ class AnimalTypesUpdate(PydanticBaseModel):
 
 # --- Product Category ---
 class ProductCategoryCreate(PydanticBaseModel):
-    name: str
-    translations: Dict[str, Dict[str, str]]
+    name: Dict[str, str]  # Multilingual: {"hy": "...", "ru": "...", "en": "..."}
+    subcategories: Optional[List[Dict[str, Any]]] = None  # List of {name: {hy, ru, en}}
 
 class ProductCategoryUpdate(PydanticBaseModel):
-    name: Optional[str] = None
-    translations: Optional[Dict[str, Dict[str, str]]] = None
+    name: Optional[Dict[str, str]] = None  # Multilingual: {"hy": "...", "ru": "...", "en": "..."}
+    subcategories: Optional[List[Dict[str, Any]]] = None
+
+class ProductSubcategoryCreate(PydanticBaseModel):
+    category_id: int
+    name: Dict[str, str]  # Multilingual: {"hy": "...", "ru": "...", "en": "..."}
+
+class ProductSubcategoryUpdate(PydanticBaseModel):
+    name: Optional[Dict[str, str]] = None  # Multilingual: {"hy": "...", "ru": "...", "en": "..."}
 
 # --- Product ---
 class ProductCreate(PydanticBaseModel):
-    name: str
+    name: Dict[str, str]  # Required Multilingual: {"en": "...", "ru": "...", "hy": "..."}
     price: Optional[float] = None
     stock: int = 0
     manufacturer: Optional[str] = None
@@ -253,27 +285,35 @@ class ProductCreate(PydanticBaseModel):
     is_new: bool = False
     types_id: Optional[int] = None
     category_id: Optional[int] = None
-    translations: Dict[str, Dict[str, str]]
-    features: Optional[List[Dict[str, str]]] = []
+    subcategory_id: Optional[int] = None
+    description: Dict[str, str]  # Required Multilingual descriptions
+    features: Optional[List[Dict[str, Any]]] = []  # Each feature has {title, description, ...}
 
 class ProductUpdate(PydanticBaseModel):
-    name: Optional[str] = None
+    name: Optional[Dict[str, str]] = None  # Multilingual: {"en": "...", "ru": "...", "hy": "..."}
     price: Optional[float] = None
     stock: Optional[int] = None
     manufacturer: Optional[str] = None
     image_url: Optional[str] = None
-    translations: Optional[Dict[str, Dict[str, str]]] = None
+    is_new: Optional[bool] = None
+    types_id: Optional[int] = None
+    category_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
+    description: Optional[Dict[str, str]] = None  # Multilingual descriptions
+    features: Optional[List[Dict[str, Any]]] = []  # Each feature has {id, title, description, translations}
 
 # --- News ---
 class NewsCreate(PydanticBaseModel):
-    title: str  # Fallback
+    name: Dict[str, str]  # Required Multilingual: {"en": "...", "ru": "...", "hy": "..."}
     image_url: Optional[str] = None
     author_id: Optional[int] = None
-    translations: Dict[str, Dict[str, str]]
-    features: Optional[List[Dict[str, str]]] = []
+    description: Dict[str, str]  # Required Multilingual descriptions
+    features: Optional[List[Dict[str, Any]]] = []  # Each feature has {id, title, description}
+
 
 class NewsUpdate(PydanticBaseModel):
-    title: Optional[str] = None
+    name: Optional[Dict[str, str]] = None  # Multilingual: {"en": "...", "ru": "...", "hy": "..."}
     image_url: Optional[str] = None
     author_id: Optional[int] = None
-    translations: Optional[Dict[str, Dict[str, str]]] = None
+    description: Optional[Dict[str, str]] = None  # Multilingual descriptions
+    features: Optional[List[Dict[str, Any]]] = None  # Each feature has {id, title, description}

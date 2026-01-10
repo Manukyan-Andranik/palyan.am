@@ -2,3 +2,10 @@
 __pycache__/
 venv_palyan/
 animal_store.db
+.DS_Store
+Archive.zip
+__MACOSX/
+create_db.py
+init.sql
+stderr.log
+tmp	

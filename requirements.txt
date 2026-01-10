@@ -27,3 +27,4 @@ starlette
 typing-inspection
 typing_extensions
 uvicorn
+asgi2wsgi

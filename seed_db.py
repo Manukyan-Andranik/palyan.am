@@ -1,3 +1,4 @@
+#seed_db.py
 import random
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
@@ -5,8 +6,12 @@ from passlib.context import CryptContext
 # Import models from main.py
 from db import engine, SessionLocal
 from db import (
-    Base, User, AnimalSpecies, ProductCategory, Product, News,
-    AnimalSpeciesTranslation, ProductCategoryTranslation, ProductTranslation, NewsTranslation,
+    Base, User, AnimalTypes, ProductCategory, Product, News,
+    AnimalTypesTranslation, ProductCategoryTranslation, ProductTranslation, NewsTranslation,
+    ProductSubcategory, ProductSubcategoryTranslation,
+    NewsAuthor, NewsAuthorTranslation,
+    NewsFeatures, NewsFeaturesTranslation,
+    ProductFeature, ProductFeatureTranslation,
     LanguageEnum
 )
 
@@ -18,59 +23,72 @@ def get_password_hash(password):
     return pwd_context.hash(password)
 
 def clear_database(db):
-    """Clear all existing data"""
+    """Clear all existing data safely in reverse order of dependencies."""
     print("🗑️  Clearing existing data...")
-    db.query(ProductTranslation).delete()
-    db.query(Product).delete()
-    db.query(NewsTranslation).delete()
-    db.query(News).delete()
-    db.query(AnimalSpeciesTranslation).delete()
-    db.query(AnimalSpecies).delete()
-    db.query(ProductCategoryTranslation).delete()
-    db.query(ProductCategory).delete()
-    db.query(User).delete()
-    db.commit()
-    print("✅ Database cleared!")
+
+    try:
+        # Product features translations -> features -> product translations -> products
+        db.query(ProductTranslation).delete(synchronize_session=False)
+        db.query(Product).delete(synchronize_session=False)
+
+        # News features translations -> features -> news translations -> news -> authors translations -> authors
+        db.query(NewsFeaturesTranslation).delete(synchronize_session=False)
+        db.query(NewsFeatures).delete(synchronize_session=False)
+        db.query(NewsTranslation).delete(synchronize_session=False)
+        db.query(News).delete(synchronize_session=False)
+        db.query(NewsAuthorTranslation).delete(synchronize_session=False)
+        db.query(NewsAuthor).delete(synchronize_session=False)
+
+        # Animal types translations -> animal types
+        db.query(AnimalTypesTranslation).delete(synchronize_session=False)
+        db.query(AnimalTypes).delete(synchronize_session=False)
+
+        # Product subcategories translations -> subcategories -> categories translations -> categories
+        db.query(ProductSubcategoryTranslation).delete(synchronize_session=False)
+        db.query(ProductSubcategory).delete(synchronize_session=False)
+        db.query(ProductCategoryTranslation).delete(synchronize_session=False)
+        db.query(ProductCategory).delete(synchronize_session=False)
+
+
+        # Optional: clear users (if needed)
+        # db.query(User).delete(synchronize_session=False)
+
+        db.commit()
+        print("✅ Database cleared!")
+
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Failed to clear database: {e}")
+
 
 def seed_users(db):
     """Create sample users"""
     print("👥 Creating users...")
     
-    users = [
-        User(
-            username="admin",
-            email="admin@animalstore.com",
-            hashed_password=get_password_hash("admin123"),
-            is_admin=True
-        ),
-        User(
-            username="john_doe",
-            email="john@example.com",
-            hashed_password=get_password_hash("password123"),
-            is_admin=False
-        ),
-        User(
-            username="jane_smith",
-            email="jane@example.com",
-            hashed_password=get_password_hash("password123"),
-            is_admin=False
-        )
-    ]
-    
-    for user in users:
-        db.add(user)
-    
-    db.commit()
-    print(f"✅ Created {len(users)} users")
-    print("   - admin / admin123 (Admin)")
-    print("   - john_doe / password123")
-    print("   - jane_smith / password123")
+    # Idempotent: only create if not exists
+    admin_username = "admin"
+    existing = db.query(User).filter_by(username=admin_username).first()
+    if existing:
+        print("✅ Admin user already exists, skipping creation")
+        return existing
 
-def seed_animal_species(db):
-    """Create sample animal species with translations"""
-    print("🐾 Creating animal species with translations...")
+    user = User(
+        username=admin_username,
+        email="admin@palyan.am",
+        hashed_password=get_password_hash("admin"),
+        is_admin=True
+    )
+    db.add(user)
+    db.commit()
+    print("✅ Created admin user")
+    print("   - admin / admin (Admin)")
+    return user
+
+def seed_animal_types(db):
+    """Create sample animal types with translations"""
+    print("🐾 Creating animal types with translations...")
     
-    species_list = [
+    types_list = [
         {
             "name": "Dogs",
             "description": "Man's best friend. Dogs are loyal, loving, and make wonderful companions for families and individuals alike.",
@@ -193,162 +211,411 @@ def seed_animal_species(db):
         }
     ]
     
-    species_objects = []
-    for species_data in species_list:
-        translations = species_data.pop("translations")
-        species = AnimalSpecies(**species_data)
-        db.add(species)
+    types_objects = []
+    for types_data in types_list:
+        translations = types_data.pop("translations")
+        # AnimalTypes model only accepts name and image_url; description goes into translations
+        types_name = types_data.get("name")
+        types_image = types_data.get("image_url")
+        types = AnimalTypes(name=types_name, image_url=types_image)
+        db.add(types)
         db.flush()  # Get the ID
         
         # Add translations
         for lang, trans_data in translations.items():
-            translation = AnimalSpeciesTranslation(
-                species_id=species.id,
+            translation = AnimalTypesTranslation(
+                types_id=types.id,
                 language=LanguageEnum(lang),
-                **trans_data
+                name=trans_data.get("name"),
+                description=trans_data.get("description")
             )
             db.add(translation)
         
-        species_objects.append(species)
+        types_objects.append(types)
     
     db.commit()
-    print(f"✅ Created {len(species_list)} animal species with translations")
-    return species_objects
+    print(f"✅ Created {len(types_list)} animal types with translations")
+    return types_objects
 
 def seed_categories(db):
-    """Create sample product categories with translations"""
-    print("📦 Creating product categories with translations...")
+    """Create product categories with subcategories and translations"""
+    print("📦 Creating product categories with subcategories and translations...")
     
     categories_list = [
         {
             "name": "Food",
-            "description": "Nutritious and delicious food for all types of pets",
             "translations": {
-                "ru": {
-                    "name": "Корм",
-                    "description": "Питательная и вкусная еда для всех видов домашних животных"
-                },
-                "hy": {
-                    "name": "Կեր",
-                    "description": "Սննդային և համեղ կեր բոլոր տեսակի ընտանի կենդանիների համար"
-                }
-            }
+                "ru": {"name": "Корм"},
+                "hy": {"name": "Կեր"},
+                "en": {"name": "Food"}
+            },
+            "subcategories": [
+                {"name": "Dry Food", "translations": {"ru": {"name": "Сухой корм"}, "hy": {"name": "Չոր կեր"}, "en": {"name": "Dry Food"}}},
+                {"name": "Wet Food", "translations": {"ru": {"name": "Влажный корм"}, "hy": {"name": "Խոնավ կեր"}, "en": {"name": "Wet Food"}}},
+                {"name": "Treats", "translations": {"ru": {"name": "Лакомства"}, "hy": {"name": "Մրցանակներ"}, "en": {"name": "Treats"}}}
+            ]
         },
         {
             "name": "Toys",
-            "description": "Fun and engaging toys to keep your pets entertained",
             "translations": {
-                "ru": {
-                    "name": "Игрушки",
-                    "description": "Веселые и увлекательные игрушки для развлечения ваших питомцев"
-                },
-                "hy": {
-                    "name": "Խաղալիքներ",
-                    "description": "Զվարճալի և հետաքրքիր խաղալիքներ ձեր կենդանիների զվարճացման համար"
-                }
-            }
+                "ru": {"name": "Игрушки"},
+                "hy": {"name": "Խաղալիքներ"},
+                "en": {"name": "Toys"}
+            },
+            "subcategories": [
+                {"name": "Rubber Toys", "translations": {"ru": {"name": "Резиновые игрушки"}, "hy": {"name": "Ռետինե խաղալիքներ"}, "en": {"name": "Rubber Toys"}}},
+                {"name": "Interactive Toys", "translations": {"ru": {"name": "Интерактивные игрушки"}, "hy": {"name": "Ինտերակտիվ խաղալիքներ"}, "en": {"name": "Interactive Toys"}}},
+                {"name": "Fetch Toys", "translations": {"ru": {"name": "Игрушки для апорта"}, "hy": {"name": "Բերման խաղալիքներ"}, "en": {"name": "Fetch Toys"}}}
+            ]
         },
         {
             "name": "Accessories",
-            "description": "Essential accessories for pet care and comfort",
             "translations": {
-                "ru": {
-                    "name": "Аксессуары",
-                    "description": "Необходимые аксессуары для ухода и комфорта питомцев"
-                },
-                "hy": {
-                    "name": "Աքսեսուարներ",
-                    "description": "Անհրաժեշտ աքսեսուարներ կենդանիների խնամքի և հարմարավետության համար"
-                }
-            }
+                "ru": {"name": "Аксессуары"},
+                "hy": {"name": "Աքսեսուարներ"},
+                "en": {"name": "Accessories"}
+            },
+            "subcategories": [
+                {"name": "Collars & Leashes", "translations": {"ru": {"name": "Ошейники и поводки"}, "hy": {"name": "Կոլարներ և վարիչներ"}, "en": {"name": "Collars & Leashes"}}},
+                {"name": "Bowls & Feeders", "translations": {"ru": {"name": "Миски и кормушки"}, "hy": {"name": "Սկուտեղներ և կերատարներ"}, "en": {"name": "Bowls & Feeders"}}},
+                {"name": "ID Tags", "translations": {"ru": {"name": "Бирки идентификации"}, "hy": {"name": "Նույնականացման պիտակներ"}, "en": {"name": "ID Tags"}}}
+            ]
         },
         {
             "name": "Healthcare",
-            "description": "Vitamins, supplements, and healthcare products for pet wellness",
             "translations": {
-                "ru": {
-                    "name": "Здравоохранение",
-                    "description": "Витамины, добавки и продукты для здоровья питомцев"
-                },
-                "hy": {
-                    "name": "Առողջապահություն",
-                    "description": "Վիտամիններ, հավելումներ և առողջապահական արտադրանք կենդանիների բարեկեցության համար"
-                }
-            }
+                "ru": {"name": "Здравоохранение"},
+                "hy": {"name": "Առողջապահություն"},
+                "en": {"name": "Healthcare"}
+            },
+            "subcategories": [
+                {"name": "Supplements", "translations": {"ru": {"name": "Добавки"}, "hy": {"name": "Հավելումներ"}, "en": {"name": "Supplements"}}},
+                {"name": "Vitamins", "translations": {"ru": {"name": "Витамины"}, "hy": {"name": "Վիտամիններ"}, "en": {"name": "Vitamins"}}},
+                {"name": "Medications", "translations": {"ru": {"name": "Лекарства"}, "hy": {"name": "Դեղամիջոցներ"}, "en": {"name": "Medications"}}}
+            ]
         },
         {
             "name": "Grooming",
-            "description": "Grooming tools and products to keep your pet looking their best",
             "translations": {
-                "ru": {
-                    "name": "Груминг",
-                    "description": "Инструменты и средства для ухода, чтобы ваш питомец выглядел наилучшим образом"
-                },
-                "hy": {
-                    "name": "Խնամք",
-                    "description": "Խնամքի գործիքներ և արտադրանք՝ ձեր կենդանուն լավագույն տեսքով պահելու համար"
-                }
-            }
+                "ru": {"name": "Груминг"},
+                "hy": {"name": "Խնամք"},
+                "en": {"name": "Grooming"}
+            },
+            "subcategories": [
+                {"name": "Shampoo & Conditioner", "translations": {"ru": {"name": "Шампунь и кондиционер"}, "hy": {"name": "Շամպուն և կոնդիցիոներ"}, "en": {"name": "Shampoo & Conditioner"}}},
+                {"name": "Brushes & Combs", "translations": {"ru": {"name": "Щетки и расчески"}, "hy": {"name": "Խոզանակներ և մազակտաններ"}, "en": {"name": "Brushes & Combs"}}},
+                {"name": "Nail Care", "translations": {"ru": {"name": "Уход за когтями"}, "hy": {"name": "Ցուպ խնամք"}, "en": {"name": "Nail Care"}}}
+            ]
         },
         {
             "name": "Housing",
-            "description": "Cages, tanks, beds, and housing solutions for pets",
             "translations": {
-                "ru": {
-                    "name": "Жилье",
-                    "description": "Клетки, аквариумы, кровати и жилищные решения для питомцев"
-                },
-                "hy": {
-                    "name": "Բնակարան",
-                    "description": "Վանդակներ, ակվարիումներ, անկողիններ և բնակարան լուծումներ կենդանիների համար"
-                }
-            }
+                "ru": {"name": "Жилье"},
+                "hy": {"name": "Բնակարան"},
+                "en": {"name": "Housing"}
+            },
+            "subcategories": [
+                {"name": "Cages", "translations": {"ru": {"name": "Клетки"}, "hy": {"name": "Վանդակներ"}, "en": {"name": "Cages"}}},
+                {"name": "Beds", "translations": {"ru": {"name": "Кровати"}, "hy": {"name": "Անկողիններ"}, "en": {"name": "Beds"}}},
+                {"name": "Tanks", "translations": {"ru": {"name": "Аквариумы"}, "hy": {"name": "Ակվարիումներ"}, "en": {"name": "Tanks"}}}
+            ]
         },
         {
             "name": "Training",
-            "description": "Training aids and tools for pet behavior and obedience",
             "translations": {
-                "ru": {
-                    "name": "Дрессировка",
-                    "description": "Средства и инструменты для дрессировки и послушания питомцев"
-                },
-                "hy": {
-                    "name": "Վարժեցում",
-                    "description": "Վարժեցման օգնական միջոցներ և գործիքներ կենդանիների վարքագծի և հնազանդության համար"
-                }
-            }
+                "ru": {"name": "Дрессировка"},
+                "hy": {"name": "Վարժեցում"},
+                "en": {"name": "Training"}
+            },
+            "subcategories": [
+                {"name": "Training Pads", "translations": {"ru": {"name": "Пеленки для тренировки"}, "hy": {"name": "Վարժեցման փաթ"}, "en": {"name": "Training Pads"}}},
+                {"name": "Training Treats", "translations": {"ru": {"name": "Угощения для тренировки"}, "hy": {"name": "Վարժեցման համեղ վտանգ"}, "en": {"name": "Training Treats"}}},
+                {"name": "Clickers & Whistles", "translations": {"ru": {"name": "Кликеры и свистки"}, "hy": {"name": "Կլիկերներ և սուլիչներ"}, "en": {"name": "Clickers & Whistles"}}}
+            ]
         }
     ]
     
     category_objects = []
     for category_data in categories_list:
         translations = category_data.pop("translations")
-        category = ProductCategory(**category_data)
+        subcats_data = category_data.pop("subcategories", [])
+        
+        # Create category
+        category = ProductCategory(name=category_data.get("name"))
         db.add(category)
         db.flush()
         
-        # Add translations
+        # Add category translations
         for lang, trans_data in translations.items():
             translation = ProductCategoryTranslation(
                 category_id=category.id,
                 language=LanguageEnum(lang),
-                **trans_data
+                name=trans_data.get("name")
             )
             db.add(translation)
+        
+        # Add subcategories
+        for subcat_data in subcats_data:
+            subcat_trans = subcat_data.pop("translations", {})
+            subcat = ProductSubcategory(category_id=category.id, name=subcat_data.get("name"))
+            db.add(subcat)
+            db.flush()
+            
+            # Add subcategory translations
+            for lang, trans_data in subcat_trans.items():
+                trans = ProductSubcategoryTranslation(
+                    subcategory_id=subcat.id,
+                    language=LanguageEnum(lang),
+                    name=trans_data.get("name")
+                )
+                db.add(trans)
         
         category_objects.append(category)
     
     db.commit()
-    print(f"✅ Created {len(categories_list)} categories with translations")
+    print(f"✅ Created {len(categories_list)} categories with subcategories")
     return category_objects
 
-def seed_products(db, species_list, categories):
-    """Create sample products with translations"""
-    print("🛍️  Creating products with translations...")
+def seed_authors(db):
+    """Create sample news authors with translations"""
+    print("✍️  Creating news authors with translations...")
+    
+    authors_data = [
+        {
+            "name": "Dr. Michael Roberts",
+            "position": "Veterinary Scientist",
+            "bio": "Dr. Roberts has been a veterinary scientist for over 15 years, specializing in canine cognition and behavior. He regularly publishes research on animal intelligence.",
+            "image_url": "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d",
+            "translations": {
+                "ru": {
+                    "name": "Доктор Майкл Робертс",
+                    "position": "Ветеринарный ученый",
+                    "bio": "Доктор Робертс работает ветеринарным ученым более 15 лет, специализируясь на когнитивных способностях и поведении собак. Он регулярно публикует исследования по интеллекту животных."
+                },
+                "hy": {
+                    "name": "Դոկտոր Մայքլ Ռոբերտս",
+                    "position": "Վետերինար գիտնական",
+                    "bio": "Դոկտոր Ռոբերտս ավելի քան 15 տարի է, ինչ վետերինար գիտնական է, մասնագիտանալով շների ճանաչողականությունում և վարքագծում: Նա կանոնավոր կերպով հրապարակում է հետազոտություններ կենդանիների ինտելեկտի վերաբերյալ:"
+                }
+            }
+        },
+        {
+            "name": "Emily Chen",
+            "position": "Feline Behavior Specialist",
+            "bio": "Emily has worked with cats for over a decade, helping owners understand and resolve behavioral issues. She runs a popular cat behavior consultation service.",
+            "image_url": "https://images.unsplash.com/photo-1580489944761-15a19d654956",
+            "translations": {
+                "ru": {
+                    "name": "Эмили Чен",
+                    "position": "Специалист по поведению кошек",
+                    "bio": "Эмили работает с кошками более десяти лет, помогая владельцам понимать и решать поведенческие проблемы. Она ведет популярную службу консультаций по поведению кошек."
+                },
+                "hy": {
+                    "name": "Էմիլի Չեն",
+                    "position": "Կատուների վարքագծի մասնագետ",
+                    "bio": "Էմիլին ավելի քան տասը տարի է աշխատում կատուների հետ՝ օգնելով տերերին հասկանալ և լուծել վարքագծային խնդիրները: Նա վարում է հայտնի կատուների վարքագծի խորհրդատվական ծառայություն:"
+                }
+            }
+        },
+        {
+            "name": "Dr. James Martinez",
+            "position": "Aquatic Life Expert",
+            "bio": "With a PhD in Marine Biology, Dr. Martinez has spent 20 years studying aquatic ecosystems and the therapeutic benefits of aquarium keeping.",
+            "image_url": "https://images.unsplash.com/photo-1560250097-0b93528c311a",
+            "translations": {
+                "ru": {
+                    "name": "Доктор Джеймс Мартинес",
+                    "position": "Эксперт по водной жизни",
+                    "bio": "Имея докторскую степень в области морской биологии, доктор Мартинес провел 20 лет, изучая водные экосистемы и терапевтические преимущества содержания аквариумов."
+                },
+                "hy": {
+                    "name": "Դոկտոր Ջեյմս Մարտինես",
+                    "position": "Ջրային կյանքի փորձագետ",
+                    "bio": "Ծովային կենսաբանության դոկտորի աստիճան ունենալով՝ Դոկտոր Մարտինեսը 20 տարի է ուսումնասիրում է ջրային էկոհամակարգերը և ակվարիումների պահպանության թերապևտիկ առավելությունները:"
+                }
+            }
+        },
+        {
+            "name": "Rebecca Foster",
+            "position": "Avian Specialist",
+            "bio": "Rebecca has been working with exotic birds for 12 years. She specializes in avian nutrition and behavioral enrichment for captive birds.",
+            "image_url": "https://images.unsplash.com/photo-1494790108755-2616b612b786",
+            "translations": {
+                "ru": {
+                    "name": "Ребекка Фостер",
+                    "position": "Специалист по птицам",
+                    "bio": "Ребекка работает с экзотическими птицами 12 лет. Она специализируется на питании птиц и поведенческом обогащении для птиц в неволе."
+                },
+                "hy": {
+                    "name": "Ռեբեկա Ֆոսթեր",
+                    "position": "Թռչունների մասնագետ",
+                    "bio": "Ռեբեկան 12 տարի է աշխատում է էկզոտիկ թռչունների հետ: Նա մասնագիտանում է թռչունների սնուցման և գերության մեջ գտնվող թռչունների վարքագծային հարստացման մեջ:"
+                }
+            }
+        },
+        {
+            "name": "Amanda Sullivan",
+            "position": "Rabbit Behavior Consultant",
+            "bio": "Amanda has dedicated her career to understanding rabbit behavior. She helps rescue centers and owners create optimal environments for rabbits.",
+            "image_url": "https://images.unsplash.com/photo-1544005313-94ddf0286df2",
+            "translations": {
+                "ru": {
+                    "name": "Аманда Салливан",
+                    "position": "Консультант по поведению кроликов",
+                    "bio": "Аманда посвятила свою карьеру пониманию поведения кроликов. Она помогает приютам и владельцам создавать оптимальные условия для кроликов."
+                },
+                "hy": {
+                    "name": "Ամանդա Սալլիվան",
+                    "position": "Ճագարների վարքագծի խորհրդատու",
+                    "bio": "Ամանդան նվիրել է իր կարիերան ճագարների վարքագիծը հասկանալուն: Նա օգնում է փրկարարական կենտրոններին և տերերին ստեղծել օպտիմալ միջավայրեր ճագարների համար:"
+                }
+            }
+        },
+        {
+            "name": "Dr. Nathan Brooks",
+            "position": "Herpetologist",
+            "bio": "Dr. Brooks is a leading herpetologist with extensive experience in reptile care, conservation, and captive breeding programs.",
+            "image_url": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d",
+            "translations": {
+                "ru": {
+                    "name": "Доктор Натан Брукс",
+                    "position": "Герпетолог",
+                    "bio": "Доктор Брукс - ведущий герпетолог с обширным опытом в уходе за рептилиями, сохранении и программах разведения в неволе."
+                },
+                "hy": {
+                    "name": "Դոկտոր Նեթան Բրուկս",
+                    "position": "Հերպետոլոգ",
+                    "bio": "Դոկտոր Բրուկսը առաջատար հերպետոլոգ է՝ սողունների խնամքի, պահպանման և գերության մեջ բուծման ծրագրերում լայն փորձառությամբ:"
+                }
+            }
+        },
+        {
+            "name": "Animal Store Team",
+            "position": "Editorial Team",
+            "bio": "Our team of pet experts and enthusiasts brings you the latest news, tips, and product information from the world of pet care.",
+            "image_url": "https://images.unsplash.com/photo-1551836026-d5c2c7d4b6ac",
+            "translations": {
+                "ru": {
+                    "name": "Команда Animal Store",
+                    "position": "Редакционная команда",
+                    "bio": "Наша команда экспертов и энтузиастов по домашним животным приносит вам последние новости, советы и информацию о продуктах из мира ухода за домашними животными."
+                },
+                "hy": {
+                    "name": "Animal Store թիմ",
+                    "position": "Խմբագրական թիմ",
+                    "bio": "Մեր ընտանի կենդանիների փորձագետների և սիրահարների թիմը բերում է ձեզ վերջին նորությունները, խորհուրդները և արտադրանքի տեղեկատվությունը ընտանի կենդանիների խնամքի աշխարհից:"
+                }
+            }
+        }
+    ]
+    
+    author_objects = []
+    for author_data in authors_data:
+        translations = author_data.pop("translations")
+        # NewsAuthor only accepts name and image_url in model
+        author = NewsAuthor(name=author_data.get("name"), image_url=author_data.get("image_url"))
+        db.add(author)
+        db.flush()
+        
+        # Add translations
+        for lang, trans_data in translations.items():
+            translation = NewsAuthorTranslation(
+                author_id=author.id,
+                language=LanguageEnum(lang),
+                name=trans_data.get("name"),
+                position=trans_data.get("position"),
+                bio=trans_data.get("bio")
+            )
+            db.add(translation)
+        
+    author_objects.append(author)
+    
+    db.commit()
+    print(f"✅ Created {len(authors_data)} news authors with translations")
+    return author_objects
+
+def seed_sample_categories_with_subcategories(db):
+    """Insert 3 seed categories and 3 subcategories for each."""
+    print("🌱 Seeding 3 categories each with 3 subcategories...")
+
+    seed = [
+        {
+            "name": "Biopreparations",
+            "translations": {
+                "hy": {"name": "Բիոպրեպարատներ", "description": "Բիոպրեպարատների նկարագրություն"},
+                "ru": {"name": "Биопрепараты", "description": "Описание биопрепаратов"},
+                "en": {"name": "Biopreparations", "description": "Biopreparations description"}
+            },
+            "subcategories": [
+                {"name": "Vaccines", "translations": {"hy": {"name": "Պատվաստանյութեր"}, "ru": {"name": "Вакцины"}, "en": {"name": "Vaccines"}}},
+                {"name": "Antibiotics", "translations": {"hy": {"name": "Անտիբիոտիկներ"}, "ru": {"name": "Антибиотики"}, "en": {"name": "Antibiotics"}}},
+                {"name": "Supplements", "translations": {"hy": {"name": "Ավելացուցիչներ"}, "ru": {"name": "Добавки"}, "en": {"name": "Supplements"}}}
+            ]
+        },
+        {
+            "name": "Hygiene",
+            "translations": {
+                "hy": {"name": "Հիգիենա", "description": "Հիգիենայի նկարագրություն"},
+                "ru": {"name": "Гигиена", "description": "Описание гигиены"},
+                "en": {"name": "Hygiene", "description": "Hygiene description"}
+            },
+            "subcategories": [
+                {"name": "Shampoos", "translations": {"hy": {"name": "Շամպուններ"}, "ru": {"name": "Шампуни"}, "en": {"name": "Shampoos"}}},
+                {"name": "Wipes", "translations": {"hy": {"name": "Ձեռոցիկներ"}, "ru": {"name": "Салфетки"}, "en": {"name": "Wipes"}}},
+                {"name": "Sanitizers", "translations": {"hy": {"name": "Անտիսեպտիկներ"}, "ru": {"name": "Антисептики"}, "en": {"name": "Sanitizers"}}}
+            ]
+        },
+        {
+            "name": "Feeds",
+            "translations": {
+                "hy": {"name": "Կերեր", "description": "Կերերի նկարագրություն"},
+                "ru": {"name": "Корма", "description": "Описание кормов"},
+                "en": {"name": "Feeds", "description": "Feeds description"}
+            },
+            "subcategories": [
+                {"name": "Dry Food", "translations": {"hy": {"name": "Ոչ թաց կեր"}, "ru": {"name": "Сухой корм"}, "en": {"name": "Dry Food"}}},
+                {"name": "Wet Food", "translations": {"hy": {"name": "Խոնավ կեր"}, "ru": {"name": "Влажный корм"}, "en": {"name": "Wet Food"}}},
+                {"name": "Treats", "translations": {"hy": {"name": "Մրցանակներ"}, "ru": {"name": "Лакомства"}, "en": {"name": "Treats"}}}
+            ]
+        }
+    ]
+
+    created = []
+    for c in seed:
+        translations = c.get("translations", {})
+        subcats = c.get("subcategories", [])
+        cat = ProductCategory(name=c["name"]) 
+        db.add(cat)
+        db.flush()
+
+        # create translations (ProductCategoryTranslation only has 'name')
+        for lang, t in translations.items():
+            tr = ProductCategoryTranslation(category_id=cat.id, language=LanguageEnum(lang), name=t.get("name"))
+            db.add(tr)
+
+        # create subcategories
+        for sc in subcats:
+            sc_trans = sc.get("translations", {})
+            sub = ProductSubcategory(category_id=cat.id, name=sc["name"]) 
+            db.add(sub)
+            db.flush()
+            for lang, st in sc_trans.items():
+                s_tr = ProductSubcategoryTranslation(subcategory_id=sub.id, language=LanguageEnum(lang), name=st.get("name"))
+                db.add(s_tr)
+
+        created.append(cat)
+
+    db.commit()
+    print(f"✅ Seeded {len(created)} categories with subcategories")
+    return created
+
+def seed_products(db, types_list, categories):
+    """Create sample products with translations and features"""
+    print("🛍️  Creating products with translations and features...")
     
     products_data = [
         # Dog Products
-        {"name": "Premium Dog Food - Chicken & Rice", "description": "High-quality dry dog food with real chicken and brown rice. Perfect for adult dogs of all breeds.", "price": 45.99, "stock": 150, "species": "Dogs", "category": "Food", "is_new": True,
+        {"name": "Premium Dog Food - Chicken & Rice", "description": "High-quality dry dog food with real chicken and brown rice. Perfect for adult dogs of all breeds.", "price": 45.99, "stock": 150, "types": "Dogs", "category": "Food", "is_new": True, "manufacturer": "PremiumPet Nutrition",
          "translations": {
              "ru": {
                  "name": "Премиум корм для собак - Курица и рис",
@@ -358,8 +625,52 @@ def seed_products(db, species_list, categories):
                  "name": "Պրեմիում շների կեր - Հավ և բրինձ",
                  "description": "Բարձրորակ չոր կեր շների համար իրական հավով և շագանակագույն բրինձով: Կատարյալ է բոլոր ցեղատեսակների չափահաս շների համար:"
              }
-         }},
-        {"name": "Interactive Dog Toy Ball", "description": "Durable rubber ball that bounces unpredictably to keep your dog entertained for hours.", "price": 12.99, "stock": 200, "species": "Dogs", "category": "Toys", "is_new": False,
+         },
+         "features": [
+             {
+                 "title": "Complete Nutrition",
+                 "description": "Formulated with essential vitamins, minerals, and antioxidants for overall health",
+                 "translations": {
+                     "ru": {
+                         "title": "Полноценное питание",
+                         "description": "Формула с необходимыми витаминами, минералами и антиоксидантами для общего здоровья"
+                     },
+                     "hy": {
+                         "title": "Լրիվ սնուցում",
+                         "description": "Կազմված է անհրաժեշտ վիտամիններով, հանքանյութերով և հակաօքսիդանտներով ընդհանուր առողջության համար"
+                     }
+                 }
+             },
+             {
+                 "title": "Digestive Health",
+                 "description": "Contains prebiotic fibers and probiotics for optimal digestion",
+                 "translations": {
+                     "ru": {
+                         "title": "Здоровье пищеварения",
+                         "description": "Содержит пребиотические волокна и пробиотики для оптимального пищеварения"
+                     },
+                     "hy": {
+                         "title": "Մարսողական առողջություն",
+                         "description": "Պարունակում է պրեբիոտիկ մանրաթելեր և պրոբիոտիկներ օպտիմալ մարսողության համար"
+                     }
+                 }
+             },
+             {
+                 "title": "Coat Health",
+                 "description": "Omega-3 fatty acids promote shiny coat and healthy skin",
+                 "translations": {
+                     "ru": {
+                         "title": "Здоровье шерсти",
+                         "description": "Омега-3 жирные кислоты способствуют блестящей шерсти и здоровой коже"
+                     },
+                     "hy": {
+                         "title": "Դիմակի առողջություն",
+                         "description": "Օմեգա-3 ճարպաթթուներն խթանում են փայլուն դիմակ և առողջ մաշկ"
+                     }
+                 }
+             }
+         ]},
+        {"name": "Interactive Dog Toy Ball", "description": "Durable rubber ball that bounces unpredictably to keep your dog entertained for hours.", "price": 12.99, "stock": 200, "types": "Dogs", "category": "Toys", "is_new": False, "manufacturer": "PlaySafe Toys",
          "translations": {
              "ru": {
                  "name": "Интерактивный мяч для собак",
@@ -369,43 +680,40 @@ def seed_products(db, species_list, categories):
                  "name": "Ինտերակտիվ գնդակ շների համար",
                  "description": "Ամուր ռետինե գնդակ, որը անկանխատեսելի է ցատկում՝ ձեր շանը ժամերով զվարճացնելու համար:"
              }
-         }},
-        {"name": "Adjustable Dog Collar - Large", "description": "Comfortable nylon collar with quick-release buckle. Available in multiple colors.", "price": 15.99, "stock": 100, "species": "Dogs", "category": "Accessories", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Регулируемый ошейник для собак - Большой",
-                 "description": "Удобный нейлоновый ошейник с быстросъемной пряжкой. Доступен в различных цветах."
+         },
+         "features": [
+             {
+                 "title": "Durable Construction",
+                 "description": "Made from high-grade, non-toxic rubber that withstands heavy chewing",
+                 "translations": {
+                     "ru": {
+                         "title": "Прочная конструкция",
+                         "description": "Изготовлен из высококачественной нетоксичной резины, выдерживающей сильное жевание"
+                     },
+                     "hy": {
+                         "title": "Դիմացկուն կառուցվածք",
+                         "description": "Պատրաստված է բարձրորակ, ոչ թունավոր ռետինից, որն դիմակայում է ծանր ծամելուն"
+                     }
+                 }
              },
-             "hy": {
-                 "name": "Կարգավորվող օձիք շների համար - Մեծ",
-                 "description": "Հարմարավետ նեյլոնե օձիք արագ բացվող կոճակով: Հասանելի է բազմաթիվ գույներով:"
+             {
+                 "title": "Unpredictable Bounce",
+                 "description": "Erratic movement pattern keeps dogs engaged and interested",
+                 "translations": {
+                     "ru": {
+                         "title": "Непредсказуемый отскок",
+                         "description": "Непостоянный характер движения удерживает собак вовлеченными и заинтересованными"
+                     },
+                     "hy": {
+                         "title": "Անկանխատեսելի ցատկ",
+                         "description": "Անկանխատեսելի շարժման օրինաչափությունը շներին պահում է ներգրավված և հետաքրքրված"
+                     }
+                 }
              }
-         }},
-        {"name": "Dog Multivitamin Supplements", "description": "Daily vitamins to support your dog's immune system and overall health.", "price": 24.99, "stock": 80, "species": "Dogs", "category": "Healthcare", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "Мультивитамины для собак",
-                 "description": "Ежедневные витамины для поддержки иммунной системы и общего здоровья вашей собаки."
-             },
-             "hy": {
-                 "name": "Շների համար մուլտիվիտամիններ",
-                 "description": "Օրական վիտամիններ ձեր շան իմունային համակարգի և ընդհանուր առողջության աջակցման համար:"
-             }
-         }},
-        {"name": "Professional Dog Grooming Kit", "description": "Complete grooming set with brush, comb, nail clippers, and scissors.", "price": 39.99, "stock": 60, "species": "Dogs", "category": "Grooming", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Профессиональный набор для груминга собак",
-                 "description": "Полный набор для груминга с щеткой, расческой, кусачками для ногтей и ножницами."
-             },
-             "hy": {
-                 "name": "Շների պրոֆեսիոնալ խնամքի հավաքածու",
-                 "description": "Ամբողջական խնամքի հավաքածու՝ խոզանակ, սանր, եղունջների մկրատ և մկրատ:"
-             }
-         }},
+         ]},
         
         # Cat Products
-        {"name": "Gourmet Cat Food - Salmon Feast", "description": "Premium wet cat food made with real salmon. Rich in protein and omega-3.", "price": 29.99, "stock": 120, "species": "Cats", "category": "Food", "is_new": False,
+        {"name": "Gourmet Cat Food - Salmon Feast", "description": "Premium wet cat food made with real salmon. Rich in protein and omega-3.", "price": 29.99, "stock": 120, "types": "Cats", "category": "Food", "is_new": False, "manufacturer": "Feline Gourmet",
          "translations": {
              "ru": {
                  "name": "Гурман корм для кошек - Лосось",
@@ -415,54 +723,40 @@ def seed_products(db, species_list, categories):
                  "name": "Գուրման կատուների կեր - Սաղմոն",
                  "description": "Պրեմիում թաց կեր կատուների համար իրական սաղմոնով: Հարուստ է սպիտակուցով և օմեգա-3-ով:"
              }
-         }},
-        {"name": "Catnip Mouse Toy Set", "description": "Set of 5 colorful mice filled with organic catnip to drive your cat wild.", "price": 9.99, "stock": 180, "species": "Cats", "category": "Toys", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "Набор игрушек-мышек с кошачьей мятой",
-                 "description": "Набор из 5 разноцветных мышек, наполненных органической кошачьей мятой, чтобы свести вашу кошку с ума."
+         },
+         "features": [
+             {
+                 "title": "Real Salmon",
+                 "description": "Made with 100% real salmon as the primary ingredient",
+                 "translations": {
+                     "ru": {
+                         "title": "Настоящий лосось",
+                         "description": "Изготовлен из 100% настоящего лосося в качестве основного ингредиента"
+                     },
+                     "hy": {
+                         "title": "Իրական սաղմոն",
+                         "description": "Պատրաստված է 100% իրական սաղմոնով որպես հիմնական բաղադրիչ"
+                     }
+                 }
              },
-             "hy": {
-                 "name": "Կատվի անանուխի մկնիկների հավաքածու",
-                 "description": "5 գունագեղ մկնիկների հավաքածու՝ լցված օրգանական կատվի անանուխով՝ ձեր կատուն խելագարելու համար:"
+             {
+                 "title": "Grain-Free",
+                 "description": "No wheat, corn, or soy for cats with sensitive stomachs",
+                 "translations": {
+                     "ru": {
+                         "title": "Без зерна",
+                         "description": "Без пшеницы, кукурузы или сои для кошек с чувствительным желудком"
+                     },
+                     "hy": {
+                         "title": "Հացահատիկազերծ",
+                         "description": "Ոչ մի ցորեն, եգիպտացորեն կամ սոյա զգայուն ստամոքս ունեցող կատուների համար"
+                     }
+                 }
              }
-         }},
-        {"name": "Automatic Cat Water Fountain", "description": "Circulating water fountain encourages cats to drink more water. Ultra-quiet pump.", "price": 34.99, "stock": 70, "species": "Cats", "category": "Accessories", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "Автоматический фонтан для кошек",
-                 "description": "Циркулирующий фонтан побуждает кошек пить больше воды. Ультра-тихий насос."
-             },
-             "hy": {
-                 "name": "Ավտոմատ ջրային շատրվան կատուների համար",
-                 "description": "Շրջանառվող ջրի շատրվանը խրախուսում է կատուներին ավելի շատ ջուր խմել: Գերանձ պոմպ:"
-             }
-         }},
-        {"name": "Cat Dental Care Treats", "description": "Crunchy treats that help reduce tartar and freshen breath.", "price": 11.99, "stock": 150, "species": "Cats", "category": "Healthcare", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Лакомства для ухода за зубами кошек",
-                 "description": "Хрустящие лакомства, которые помогают уменьшить зубной камень и освежить дыхание."
-             },
-             "hy": {
-                 "name": "Կատուների ատամների խնամքի համար նախատեսված համեղություններ",
-                 "description": "Խռչող համեղություններ, որոնք օգնում են կրճատել ատամների քարը և թարմացնել շնչառությունը:"
-             }
-         }},
-        {"name": "Cat Self-Grooming Arch", "description": "Bristle arch allows cats to groom themselves while you watch them enjoy.", "price": 19.99, "stock": 90, "species": "Cats", "category": "Grooming", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Арка для самостоятельного груминга кошек",
-                 "description": "Арка со щетинками позволяет кошкам ухаживать за собой, пока вы наблюдаете, как они наслаждаются."
-             },
-             "hy": {
-                 "name": "Կատվի ինքնախնամքի կամար",
-                 "description": "Կամարը խոզանակներով թույլ է տալիս կատուներին խնամել իրենց, մինչ դուք նայում եք, թե ինչպես են վայելում:"
-             }
-         }},
+         ]},
         
         # Bird Products
-        {"name": "Premium Bird Seed Mix", "description": "Nutritious blend of seeds, nuts, and dried fruits for all bird species.", "price": 18.99, "stock": 100, "species": "Birds", "category": "Food", "is_new": False,
+        {"name": "Premium Bird Seed Mix", "description": "Nutritious blend of seeds, nuts, and dried fruits for all bird types.", "price": 18.99, "stock": 100, "types": "Birds", "category": "Food", "is_new": False, "manufacturer": "Avian Delight",
          "translations": {
              "ru": {
                  "name": "Премиум смесь семян для птиц",
@@ -472,32 +766,26 @@ def seed_products(db, species_list, categories):
                  "name": "Պրեմիում սերմերի խառնուրդ թռչունների համար",
                  "description": "Սննդարար սերմերի, ընկույզների և չորացրած մրգերի խառնուրդ բոլոր տեսակի թռչունների համար:"
              }
-         }},
-        {"name": "Bird Swing Perch with Bell", "description": "Natural wood swing with entertaining bell. Perfect for parakeets and small birds.", "price": 8.99, "stock": 140, "species": "Birds", "category": "Toys", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Качели для птиц с колокольчиком",
-                 "description": "Качели из натурального дерева с развлекательным колокольчиком. Идеально для попугайчиков и маленьких птиц."
-             },
-             "hy": {
-                 "name": "Թռչունների ճոճանակ զանգակով",
-                 "description": "Բնական փայտից ճոճանակ զվարճալի զանգակով: Կատարյալ է թութակների և փոքր թռչունների համար:"
+         },
+         "features": [
+             {
+                 "title": "Balanced Nutrition",
+                 "description": "Carefully balanced for optimal health and vibrant plumage",
+                 "translations": {
+                     "ru": {
+                         "title": "Сбалансированное питание",
+                         "description": "Тщательно сбалансировано для оптимального здоровья и яркого оперения"
+                     },
+                     "hy": {
+                         "title": "Հավասարակշռված սնուցում",
+                         "description": "Ուշադրությամբ հավասարակշռված է օպտիմալ առողջության և վառ փետուրների համար"
+                     }
+                 }
              }
-         }},
-        {"name": "Stainless Steel Bird Cage", "description": "Spacious cage with multiple perches and feeding stations. Easy to clean.", "price": 89.99, "stock": 35, "species": "Birds", "category": "Housing", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "Клетка из нержавеющей стали для птиц",
-                 "description": "Просторная клетка с несколькими жердочками и кормушками. Легко чистится."
-             },
-             "hy": {
-                 "name": "Անժանգ պողպատից վանդակ թռչունների համար",
-                 "description": "Ընդարձակ վանդակ բազմաթիվ նստատեղերով և կերակրման կայաններով: Հեշտ է մաքրել:"
-             }
-         }},
+         ]},
         
         # Fish Products
-        {"name": "Tropical Fish Flakes", "description": "Complete nutrition for all tropical fish. Enhances colors naturally.", "price": 13.99, "stock": 200, "species": "Fish", "category": "Food", "is_new": False,
+        {"name": "Tropical Fish Flakes", "description": "Complete nutrition for all tropical fish. Enhances colors naturally.", "price": 13.99, "stock": 200, "types": "Fish", "category": "Food", "is_new": False, "manufacturer": "Aqua Life",
          "translations": {
              "ru": {
                  "name": "Хлопья для тропических рыб",
@@ -507,186 +795,46 @@ def seed_products(db, species_list, categories):
                  "name": "Թաթիկներ արևադարձային ձկների համար",
                  "description": "Ամբողջական սնուցում բոլոր արևադարձային ձկների համար: Բնականորեն բարելավում է գույները:"
              }
-         }},
-        {"name": "Aquarium Decoration Castle", "description": "Detailed resin castle provides hiding spots and enhances aquarium aesthetics.", "price": 22.99, "stock": 85, "species": "Fish", "category": "Accessories", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Декоративный замок для аквариума",
-                 "description": "Детализированный смоляной замок обеспечивает укрытия и улучшает эстетику аквариума."
-             },
-             "hy": {
-                 "name": "Ակվարիումի զարդարանքի դղյակ",
-                 "description": "Մանրամասն սմոլային դղյակը թաքստոցներ է տալիս և բարելավում է ակվարիումի գեղագիտությունը:"
+         },
+         "features": [
+             {
+                 "title": "Color Enhancement",
+                 "description": "Natural carotenoids enhance red, orange, and yellow pigments",
+                 "translations": {
+                     "ru": {
+                         "title": "Улучшение цвета",
+                         "description": "Натуральные каротиноиды усиливают красные, оранжевые и желтые пигменты"
+                     },
+                     "hy": {
+                         "title": "Գույնի բարելավում",
+                         "description": "Բնական կարոտինոիդներն ուժեղացնում են կարմիր, նարնջագույն և դեղին գունանյութերը"
+                     }
+                 }
              }
-         }},
-        {"name": "LED Aquarium Light", "description": "Energy-efficient LED lighting with adjustable color spectrum for plant growth.", "price": 44.99, "stock": 50, "species": "Fish", "category": "Housing", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "LED освещение для аквариума",
-                 "description": "Энергоэффективное LED освещение с регулируемым цветовым спектром для роста растений."
-             },
-             "hy": {
-                 "name": "LED լուսավորություն ակվարիումի համար",
-                 "description": "Էներգաարդյունավետ LED լուսավորություն կարգավորվող գունային սպեկտրով բույսերի աճի համար:"
-             }
-         }},
-        
-        # Rabbit Products
-        {"name": "Timothy Hay for Rabbits - 5lb", "description": "Fresh, high-fiber timothy hay essential for rabbit dental and digestive health.", "price": 16.99, "stock": 110, "species": "Rabbits", "category": "Food", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Сено тимофеевка для кроликов - 5 фунтов",
-                 "description": "Свежее сено тимофеевки с высоким содержанием клетчатки, необходимое для здоровья зубов и пищеварения кроликов."
-             },
-             "hy": {
-                 "name": "Տիմոթի խոտ ճագարների համար - 5 ֆունտ",
-                 "description": "Թարմ, բարձր մանրաթելային տիմոթի խոտ՝ անհրաժեշտ ճագարների ատամների և մարսողության առողջության համար:"
-             }
-         }},
-        {"name": "Rabbit Chew Toy Bundle", "description": "Set of natural wood chews to keep rabbit teeth healthy and trim.", "price": 14.99, "stock": 95, "species": "Rabbits", "category": "Toys", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Набор игрушек-погрызушек для кроликов",
-                 "description": "Набор жевательных игрушек из натурального дерева для поддержания здоровья и подстригания зубов кроликов."
-             },
-             "hy": {
-                 "name": "Ճագարների ծամոն խաղալիքների հավաքածու",
-                 "description": "Բնական փայտից ծամոն խաղալիքների հավաքածու՝ ճագարների ատամների առողջությունը և հարդարումը պահպանելու համար:"
-             }
-         }},
-        {"name": "Large Rabbit Hutch", "description": "Spacious indoor/outdoor hutch with separate sleeping and play areas.", "price": 149.99, "stock": 25, "species": "Rabbits", "category": "Housing", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "Большая клетка для кроликов",
-                 "description": "Просторная клетка для помещений/улицы с отдельными зонами для сна и игр."
-             },
-             "hy": {
-                 "name": "Մեծ վանդակ ճագարների համար",
-                 "description": "Ընդարձակ ներքին/արտաքին վանդակ առանձին քնի և խաղի տարածքներով:"
-             }
-         }},
-        
-        # Hamster Products
-        {"name": "Hamster Food Pellets", "description": "Balanced nutrition pellets fortified with vitamins and minerals.", "price": 9.99, "stock": 160, "species": "Hamsters", "category": "Food", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Гранулы корма для хомяков",
-                 "description": "Сбалансированные питательные гранулы, обогащенные витаминами и минералами."
-             },
-             "hy": {
-                 "name": "Համստերների կերի գրանուլաներ",
-                 "description": "Հավասարակշռված սննդարար գրանուլաներ՝ հարստացված վիտամիններով և հանքանյութերով:"
-             }
-         }},
-        {"name": "Hamster Exercise Wheel", "description": "Silent spinner wheel for safe and quiet exercise. Multiple sizes available.", "price": 12.99, "stock": 130, "species": "Hamsters", "category": "Toys", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Беговое колесо для хомяков",
-                 "description": "Бесшумное вращающееся колесо для безопасных и тихих упражнений. Доступно несколько размеров."
-             },
-             "hy": {
-                 "name": "Համստերների մարզման անիվ",
-                 "description": "Անլսելի պտտվող անիվ անվտանգ և հանգիստ մարզման համար: Հասանելի է բազմաթիվ չափսեր:"
-             }
-         }},
-        {"name": "Deluxe Hamster Cage with Tubes", "description": "Multi-level habitat with colorful tubes and hideouts for exploration.", "price": 59.99, "stock": 40, "species": "Hamsters", "category": "Housing", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "Делюкс клетка для хомяков с трубками",
-                 "description": "Многоуровневая среда обитания с красочными трубками и укрытиями для исследования."
-             },
-             "hy": {
-                 "name": "Դելյուքս վանդակ համստերների համար խողովակներով",
-                 "description": "Բազմամակարդակ բնակարան գունագեղ խողովակներով և թաքստոցներով ուսումնասիրության համար:"
-             }
-         }},
-        
-        # Reptile Products
-        {"name": "Live Crickets (50 count)", "description": "Fresh live crickets, gut-loaded for maximum nutrition. Perfect for reptiles.", "price": 11.99, "stock": 75, "species": "Reptiles", "category": "Food", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Живые сверчки (50 штук)",
-                 "description": "Свежие живые сверчки, насыщенные питательными веществами. Идеально для рептилий."
-             },
-             "hy": {
-                 "name": "Ողջ ճռիկներ (50 հատ)",
-                 "description": "Թարմ կենդանի ճռիկներ՝ լցված սննդանյութերով առավելագույն սնուցման համար: Կատարյալ է սողունների համար:"
-             }
-         }},
-        {"name": "Reptile Heating Lamp", "description": "UVB heating lamp essential for reptile health and metabolism.", "price": 32.99, "stock": 65, "species": "Reptiles", "category": "Accessories", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Нагревательная лампа для рептилий",
-                 "description": "UVB нагревательная лампа, необходимая для здоровья и метаболизма рептилий."
-             },
-             "hy": {
-                 "name": "Սողունների տաքացման լամպ",
-                 "description": "UVB տաքացման լամպ՝ անհրաժեշտ սողունների առողջության և նյութափոխանակության համար:"
-             }
-         }},
-        {"name": "Glass Terrarium 20-Gallon", "description": "Front-opening terrarium with screen top. Ideal for most reptile species.", "price": 119.99, "stock": 30, "species": "Reptiles", "category": "Housing", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "Стеклянный террариум 20 галлонов",
-                 "description": "Террариум с передним открыванием и сетчатой крышкой. Идеален для большинства видов рептилий."
-             },
-             "hy": {
-                 "name": "Ապակե տերարիում 20 գալոն",
-                 "description": "Տերարիում առջևի բացվող դռնով և ցանցի կափարիչով: Կատարյալ է սողունների մեծ մասի համար:"
-             }
-         }},
-        
-        # Guinea Pig Products
-        {"name": "Guinea Pig Pellet Food", "description": "Vitamin C fortified pellets specially formulated for guinea pigs.", "price": 14.99, "stock": 125, "species": "Guinea Pigs", "category": "Food", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Гранулированный корм для морских свинок",
-                 "description": "Гранулы, обогащенные витамином С, специально разработанные для морских свинок."
-             },
-             "hy": {
-                 "name": "Ծովախոզուկների գրանուլյար կեր",
-                 "description": "Վիտամին C-ով հարստացված գրանուլաներ՝ հատուկ ձևակերպված ծովախոզուկների համար:"
-             }
-         }},
-        {"name": "Guinea Pig Hideout House", "description": "Wooden hideout provides security and privacy for nervous guinea pigs.", "price": 18.99, "stock": 80, "species": "Guinea Pigs", "category": "Accessories", "is_new": False,
-         "translations": {
-             "ru": {
-                 "name": "Домик-укрытие для морских свинок",
-                 "description": "Деревянное укрытие обеспечивает безопасность и уединение для нервных морских свинок."
-             },
-             "hy": {
-                 "name": "Ծովախոզուկների թաքստոց տուն",
-                 "description": "Փայտե թաքստոցն ապահովում է անվտանգություն և գաղտնիություն նյարդային ծովախոզուկների համար:"
-             }
-         }},
-        {"name": "Guinea Pig Vitamin C Drops", "description": "Essential vitamin C supplement to prevent scurvy and boost immunity.", "price": 13.99, "stock": 90, "species": "Guinea Pigs", "category": "Healthcare", "is_new": True,
-         "translations": {
-             "ru": {
-                 "name": "Капли витамина С для морских свинок",
-                 "description": "Необходимая добавка витамина С для предотвращения цинги и укрепления иммунитета."
-             },
-             "hy": {
-                 "name": "Ծովախոզուկների վիտամին C կաթիլներ",
-                 "description": "Անհրաժեշտ վիտամին C հավելում՝ ցինգան կանխելու և իմունիտետը բարձրացնելու համար:"
-             }
-         }}
+         ]}
     ]
     
-    # Create species and category lookup dictionaries
-    species_dict = {s.name: s for s in species_list}
+    # Create types and category lookup dictionaries
+    types_dict = {s.name: s for s in types_list}
     category_dict = {c.name: c for c in categories}
     
     product_objects = []
     for product_data in products_data:
-        translations = product_data.pop("translations")
-        species_name = product_data.pop("species")
+        translations = product_data.pop("translations", {})
+        features = product_data.pop("features", [])
+        types_name = product_data.pop("types")
         category_name = product_data.pop("category")
         
+        # Only keep valid Product fields here
         product = Product(
-            **product_data,
-            species_id=species_dict[species_name].id,
-            category_id=category_dict[category_name].id,
-            image_url=f"https://images.unsplash.com/photo-{random.randint(1500000000000, 1700000000000)}"
+            name=product_data.get("name"),
+            price=product_data.get("price"),
+            stock=product_data.get("stock", 0),
+            manufacturer=product_data.get("manufacturer"),
+            image_url=product_data.get("image_url") or f"https://images.unsplash.com/photo-{random.randint(1500000000000, 1700000000000)}",
+            is_new=product_data.get("is_new", False),
+            types_id=types_dict[types_name].id,
+            category_id=category_dict[category_name].id
         )
         db.add(product)
         db.flush()
@@ -696,19 +844,45 @@ def seed_products(db, species_list, categories):
             translation = ProductTranslation(
                 product_id=product.id,
                 language=LanguageEnum(lang),
-                **trans_data
+                name=trans_data.get("name"),
+                description=trans_data.get("description")
             )
             db.add(translation)
+        
+        # Add features
+        for feature_data in features:
+            feature_translations = feature_data.pop("translations", {})
+            feature = ProductFeature(
+                product_id=product.id,
+                title=feature_data.get("title")
+            )
+            db.add(feature)
+            db.flush()
+            
+            # Add feature translations
+            for lang, trans_data in feature_translations.items():
+                feature_translation = ProductFeatureTranslation(
+                    feature_id=feature.id,
+                    language=LanguageEnum(lang),
+                    title=trans_data.get("title"),
+                    description=trans_data.get("description")
+                )
+                db.add(feature_translation)
         
         product_objects.append(product)
     
     db.commit()
-    print(f"✅ Created {len(products_data)} products with translations")
+    print(f"✅ Created {len(products_data)} products with translations and features")
     return product_objects
 
-def seed_news(db):
-    """Create sample news articles with translations"""
-    print("📰 Creating news articles with translations...")
+def seed_news(db, authors):
+    """Create sample news articles with translations and features"""
+    print("📰 Creating news articles with translations and features...")
+    
+    # Create author lookup dictionary
+    author_dict = {}
+    for author in authors:
+        author_dict[author.name] = author.id
     
     news_data = [
         {
@@ -747,7 +921,37 @@ The research also explored how dogs process commands and emotional tones, findin
 
 Հետազոտությունը նաև ուսումնասիրել է, թե ինչպես են շները մշակում հրամաններն ու զգացմունքային երանգները, և հայտնաբերել, որ նրանք արձագանքում են ոչ միայն բառերին, այլ նաև այն զգացմունքային համատեքստին, որում դրանք արտասանվում են: Սա կարևոր հետևանքներ ունի շների վարժեցման և մարդկանց ու կենդանիների հաղորդակցության համար:"""
                 }
-            }
+            },
+            "features": [
+                {
+                    "title": "Study Duration",
+                    "description": "Three-year comprehensive study involving multiple research institutions",
+                    "translations": {
+                        "ru": {
+                            "title": "Продолжительность исследования",
+                            "description": "Трехлетнее комплексное исследование с участием нескольких научных учреждений"
+                        },
+                        "hy": {
+                            "title": "Ուսումնասիրության տևողությունը",
+                            "description": "Երեք տարվա համապարփակ ուսումնասիրություն՝ ներառելով բազմաթիվ հետազոտական հաստատություններ"
+                        }
+                    }
+                },
+                {
+                    "title": "Key Findings",
+                    "description": "Border Collies demonstrated highest vocabulary retention at 300+ words",
+                    "translations": {
+                        "ru": {
+                            "title": "Ключевые выводы",
+                            "description": "Бордер-колли продемонстрировали наивысшее сохранение словарного запаса - более 300 слов"
+                        },
+                        "hy": {
+                            "title": "Հիմնական հայտնաբերումները",
+                            "description": "Բորդեր կոլիները ցուցադրել են ամենաբարձր բառապաշարի պահպանում՝ 300+ բառ"
+                        }
+                    }
+                }
+            ]
         },
         {
             "title": "Top 10 Tips for First-Time Cat Owners",
@@ -833,539 +1037,54 @@ Remember, every cat is unique, and what works for one may not work for another. 
 
 Հիշեք, որ յուրաքանչյուր կատու եզակի է, և այն, ինչ աշխատում է մեկի համար, կարող է չաշխատել մյուսի համար: Բանալին հանդուրժողականությունն է, դիտարկումը և շատ սերը:"""
                 }
-            }
-        },
-        {
-            "title": "The Benefits of Aquarium Keeping for Mental Health",
-            "summary": "Studies show that watching fish in an aquarium can reduce stress and anxiety, making fishkeeping a therapeutic hobby.",
-            "content": """In our fast-paced, stress-filled world, people are constantly seeking ways to improve their mental health and well-being. One surprisingly effective method that's gaining recognition is aquarium keeping.
-
-Recent studies from the National Marine Aquarium in Plymouth, UK, have demonstrated that watching fish swim can significantly reduce stress levels and lower blood pressure. The gentle movements, the sound of flowing water, and the peaceful environment created by an aquarium produce a calming effect similar to meditation.
-
-Dr. Lisa Peterson, a clinical psychologist, explains: "The rhythmic movement of fish and the serene aquatic environment engage our attention in a way that's both calming and restorative. It's a form of mindfulness that happens naturally."
-
-Benefits include:
-- Reduced heart rate and blood pressure
-- Decreased anxiety and stress levels
-- Improved mood and emotional well-being
-- Better focus and concentration
-- Enhanced sleep quality
-
-The study also noted that participants with larger, more diverse aquariums reported greater benefits, though even small desktop aquariums provided positive effects.
-
-For those considering starting this therapeutic hobby, experts recommend beginning with hardy fish species and simple setups, gradually expanding as confidence grows.""",
-            "author": "Dr. James Martinez",
-            "image_url": "https://images.unsplash.com/photo-1524704654690-b56c05c78a00",
-            "published_at": datetime.now() - timedelta(days=7),
-            "translations": {
-                "ru": {
-                    "title": "Польза содержания аквариума для психического здоровья",
-                    "summary": "Исследования показывают, что наблюдение за рыбами в аквариуме может снизить стресс и тревогу, делая рыбоводство терапевтическим хобби.",
-                    "content": """В нашем быстром, наполненном стрессом мире люди постоянно ищут способы улучшить свое психическое здоровье и благополучие. Одним из удивительно эффективных методов, который получает признание, является содержание аквариума.
-
-Недавние исследования Национального морского аквариума в Плимуте, Великобритания, показали, что наблюдение за плавающими рыбами может значительно снизить уровень стресса и понизить кровяное давление. Нежные движения, звук текущей воды и мирная обстановка, создаваемая аквариумом, производят успокаивающий эффект, подобный медитации.
-
-Доктор Лиза Петерсон, клинический психолог, объясняет: "Ритмичное движение рыб и спокойная водная среда привлекают наше внимание таким образом, который одновременно успокаивает и восстанавливает. Это форма осознанности, которая происходит естественно".
-
-Преимущества включают:
-- Снижение частоты сердечных сокращений и кровяного давления
-- Снижение уровня тревоги и стресса
-- Улучшение настроения и эмоционального благополучия
-- Лучшая концентрация и фокусировка
-- Улучшенное качество сна
-
-Исследование также отметило, что участники с более крупными, более разнообразными аквариумами сообщали о больших преимуществах, хотя даже маленькие настольные аквариумы обеспечивали положительные эффекты.
-
-Для тех, кто рассматривает начало этого терапевтического хобби, эксперты рекомендуют начинать с выносливых видов рыб и простых установок, постепенно расширяясь по мере роста уверенности."""
+            },
+            "features": [
+                {
+                    "title": "Essential Supplies",
+                    "description": "Litter box, scratching post, carrier, food/water bowls, toys",
+                    "translations": {
+                        "ru": {
+                            "title": "Необходимые принадлежности",
+                            "description": "Лоток, когтеточка, переноска, миски для еды/воды, игрушки"
+                        },
+                        "hy": {
+                            "title": "Անհրաժեշտ պարագաներ",
+                            "description": "Ծղոտի տուփ, քերծման սյուն, փոխադրիչ, կերակրի/ջրի ամաններ, խաղալիքներ"
+                        }
+                    }
                 },
-                "hy": {
-                    "title": "Ակվարիում պահելու առավելությունները հոգեկան առողջության համար",
-                    "summary": "Ուսումնասիրությունները ցույց են տալիս, որ ակվարիումում ձկներին դիտելը կարող է նվազեցնել սթրեսը և անհանգստությունը՝ ձկնաբուծությունը դարձնելով թերապևտիկ հոբբի:",
-                    "content": """Մեր արագընթաց, սթրեսով լցված աշխարհում մարդիկ անընդհատ ձգտում են բարելավել իրենց հոգեկան առողջությունը և բարեկեցությունը: Մեկ անսպասելիորեն արդյունավետ մեթոդ, որը ստանում է ճանաչում, ակվարիումի պահպանումն է:
-
-Մեծ Բրիտանիայի Պլիմուտի ազգային ծովային ակվարիումի վերջին ուսումնասիրությունները ցույց են տվել, որ լողացող ձկներին դիտելը կարող է զգալիորեն նվազեցնել սթրեսի մակարդակը և իջեցնել արյան ճնշումը: Նուրբ շարժումները, հոսող ջրի ձայնը և ակվարիումի ստեղծած խաղաղ միջավայրը առաջացնում են հանգստացնող ազդեցություն, որը նման է մեդիտացիայի:
-
-Կլինիկական հոգեբան Դոկտոր Լիզա Փիթերսոնը բացատրում է. «Ձկների ռիթմիկ շարժումը և հանգիստ ջրային միջավայրը մեր ուշադրությունը գրավում են այնպիսի ձևով, որը միաժամանակ հանգստացնում և վերականգնում է: Դա գիտակցվածության ձև է, որը տեղի է ունենում բնականաբար»:
-
-Առավելությունները ներառում են.
-- Սրտի զարկերի և արյան ճնշման նվազում
-- Անհանգստության և սթրեսի մակարդակների նվազում
-- Տրամադրության և հուզական բարեկեցության բարելավում
-- Լավ կենտրոնացում և ֆոկուս
-- Բարելավված քնի որակ
-
-Ուսումնասիրությունը նաև նշել է, որ ավելի մեծ, ավելի բազմազան ակվարիումներ ունեցող մասնակիցները զեկուցել են ավելի մեծ օգուտների մասին, թեև նույնիսկ փոքր սեղանի ակվարիումները տվել են դրական ազդեցություններ:
-
-Նրանց համար, ովքեր դիտարկում են այս թերապևտիկ հոբբին սկսելը, փորձագետները խորհուրդ են տալիս սկսել ամուր ձկների տեսակներից և պարզ կազմավորումներից, աստիճանաբար ընդլայնվելով, երբ վստահությունը մեծանում է:"""
+                {
+                    "title": "Emergency Preparedness",
+                    "description": "Keep emergency vet contact and know signs of common feline illnesses",
+                    "translations": {
+                        "ru": {
+                            "title": "Готовность к чрезвычайным ситуациям",
+                            "description": "Храните контакт ветеринара для экстренных случаев и знайте признаки распространенных кошачьих заболеваний"
+                        },
+                        "hy": {
+                            "title": "Վթարային պատրաստվածություն",
+                            "description": "Պահպանեք արտակարգ դեպքերի համար անասնաբույժի կոնտակտը և իմացեք սովորական կատվային հիվանդությունների նշանները"
+                        }
+                    }
                 }
-            }
-        },
-        {
-            "title": "Exotic Birds as Pets: What You Need to Know",
-            "summary": "Considering a parrot or other exotic bird? Learn about the commitment, care requirements, and joys of bird ownership.",
-            "content": """Exotic birds, particularly parrots, make fascinating and rewarding pets, but they require significant commitment and specialized care. Before bringing home a feathered friend, it's crucial to understand what bird ownership entails.
-
-Lifespan Considerations:
-Many exotic birds live for decades. Large parrots like Macaws and Cockatoos can live 50-80 years, meaning they may outlive their owners. This long-term commitment should not be taken lightly.
-
-Social Needs:
-Birds are highly social creatures that require daily interaction. They can become depressed, develop behavioral problems, or engage in self-destructive behaviors like feather plucking if neglected.
-
-Space Requirements:
-Despite their size, birds need large cages and several hours of supervised out-of-cage time daily. The cage should be spacious enough for the bird to fully spread its wings.
-
-Diet and Nutrition:
-A varied diet including pellets, fresh fruits, vegetables, and occasional nuts is essential. Avoid avocado, chocolate, caffeine, and salt, which are toxic to birds.
-
-Noise Level:
-Many exotic birds are loud, especially during dawn and dusk. Screaming is natural behavior but can be challenging in apartments or noise-sensitive environments.
-
-Veterinary Care:
-Avian veterinarians are specialized and may not be available in all areas. Regular check-ups are essential as birds hide illness well.
-
-Despite these challenges, bird owners report incredible rewards. Birds are intelligent, affectionate, and can form deep bonds with their owners. They can learn tricks, mimic speech, and provide years of companionship. If you're prepared for the commitment, an exotic bird might be the perfect pet for you.""",
-            "author": "Rebecca Foster, Avian Specialist",
-            "image_url": "https://images.unsplash.com/photo-1564349683136-77e08dba1ef7",
-            "published_at": datetime.now() - timedelta(days=10),
-            "translations": {
-                "ru": {
-                    "title": "Экзотические птицы как домашние животные: что вам нужно знать",
-                    "summary": "Рассматриваете попугая или другую экзотическую птицу? Узнайте об обязательствах, требованиях по уходу и радостях владения птицей.",
-                    "content": """Экзотические птицы, особенно попугаи, становятся увлекательными и вознаграждающими домашними животными, но они требуют значительных обязательств и специализированного ухода. Прежде чем привести домой пернатого друга, важно понять, что влечет за собой владение птицей.
-
-Соображения по продолжительности жизни:
-Многие экзотические птицы живут десятилетиями. Крупные попугаи, такие как ара и какаду, могут жить 50-80 лет, что означает, что они могут пережить своих владельцев. Это долгосрочное обязательство не следует воспринимать легкомысленно.
-
-Социальные потребности:
-Птицы - высоко социальные существа, требующие ежедневного взаимодействия. Они могут впасть в депрессию, развить поведенческие проблемы или заниматься саморазрушительным поведением, таким как выщипывание перьев, если их пренебрегать.
-
-Требования к пространству:
-Несмотря на свой размер, птицы нуждаются в больших клетках и нескольких часах контролируемого времени вне клетки ежедневно. Клетка должна быть достаточно просторной, чтобы птица могла полностью расправить крылья.
-
-Диета и питание:
-Разнообразная диета, включающая гранулы, свежие фрукты, овощи и орехи, является необходимой. Избегайте авокадо, шоколада, кофеина и соли, которые токсичны для птиц.
-
-Уровень шума:
-Многие экзотические птицы громкие, особенно на рассвете и в сумерках. Крики - естественное поведение, но могут быть проблематичными в квартирах или шумочувствительных средах.
-
-Ветеринарная помощь:
-Ветеринары по птицам специализированы и могут быть недоступны во всех регионах. Регулярные проверки необходимы, так как птицы хорошо скрывают болезни.
-
-Несмотря на эти проблемы, владельцы птиц сообщают о невероятных наградах. Птицы умны, ласковы и могут формировать глубокие связи со своими владельцами. Они могут учить трюки, имитировать речь и обеспечивать годы общения. Если вы готовы к обязательствам, экзотическая птица может быть идеальным питомцем для вас."""
-                },
-                "hy": {
-                    "title": "Էկզոտիկ թռչունները որպես ընտանի կենդանիներ. ինչ պետք է իմանաք",
-                    "summary": "Դիտարկում եք թութակ կամ այլ էկզոտիկ թռչուն: Իմացեք պարտավորությունների, խնամքի պահանջների և թռչուն ունենալու ուրախությունների մասին:",
-                    "content": """Էկզոտիկ թռչունները, հատկապես թութակները, դառնում են հետաքրքիր և մրցակցային ընտանի կենդանիներ, բայց դրանք պահանջում են զգալի պարտավորություններ և մասնագիտացված խնամք: Փետրավոր ընկերոջը տուն բերելուց առաջ կարևոր է հասկանալ, թե ինչ է ներառում թռչուն ունենալը:
-
-Սպասվող կյանքի տևողության նկատառումներ.
-Շատ էկզոտիկ թռչուններ ապրում են տասնամյակներ: Թութակների նման մեծ թռչունները, ինչպիսիք են մակաոն և կակատուն, կարող են ապրել 50-80 տարի, ինչը նշանակում է, որ դրանք կարող են գերազանցել իրենց տերերին: Այս երկարաժամկետ պարտավորությունը չպետք է թեթևամտորեն ընդունվի:
-
-Սոցիալական կարիքներ.
-Թռչունները բարձր սոցիալական արարածներ են, որոնք պահանջում են օրական փոխգործակցություն: Նրանք կարող են ընկնել դեպրեսիայի մեջ, զարգացնել վարքային խնդիրներ կամ զբաղվել ինքնավերացական վարքագծով, ինչպիսին է փետուրների քաշելը, եթե անտեսվեն:
-
-Տարածքի պահանջներ.
-Չնայած իրենց չափին, թռչուններին անհրաժեշտ են մեծ վանդակներ և օրական մի քանի ժամ հսկողության տակ դուրս վանդակ ժամանակ: Վանդակը պետք է բավականաչափ ընդարձակ լինի, որպեսզի թռչունը կարողանա ամբողջությամբ տարածել իր թևերը:
-
-Դիետա և սնուցում.
-Տարբեր դիետա, ներառյալ գրանուլաներ, թարմ մրգեր, բանջարեղեն և ընդհատվող ընկույզ, անհրաժեշտ է: Խուսափեք ավոկադոյից, շոկոլադից, կոֆեինից և աղից, որոնք թունավոր են թռչունների համար:
-
-Շաղախի մակարդակ.
-Շատ էկզոտիկ թռչուններ բարձրաձայն են, հատկապես արշալույսին և մթնշաղին: Բղավելը բնական վարքագիծ է, բայց կարող է լինել բարդ բնակարաններում կամ աղմուկի զգայուն միջավայրերում:
-
-Անասնաբուժական խնամք.
-Թռչունների անասնաբույժները մասնագիտացված են և կարող են մատչելի չլինել բոլոր տարածքներում: Կանոնավոր ստուգումներն անհրաժեշտ են, քանի որ թռչունները լավ թաքցնում են հիվանդությունը:
-
-Չնայած այս մարտահրավերներին, թռչունների սեփականատերերը հաղորդում են անհավատալի պարգևների մասին: Թռչունները խելացի են, սիրող և կարող են ձևավորել խորը կապեր իրենց տերերի հետ: Նրանք կարող են սովորել հնարքներ, նմանակել խոսքը և ապահովել տարիների ընկերակցություն: Եթե պատրաստ եք պարտավորության, էկզոտիկ թռչունը կարող է ձեզ համար կատարյալ ընտանի կենդանի լինել:"""
-                }
-            }
-        },
-        {
-            "title": "Understanding Rabbit Behavior: What Your Bunny Is Trying to Tell You",
-            "summary": "Rabbits communicate through subtle body language. Learn to decode your rabbit's behaviors and strengthen your bond.",
-            "content": """Rabbits are complex, expressive animals with a rich vocabulary of behaviors. Understanding these signals can help you better meet your rabbit's needs and deepen your relationship.
-
-Happy Behaviors:
-
-Binkying: When a rabbit jumps, twists, and kicks in mid-air, they're expressing pure joy. This adorable behavior is a sign of a happy, healthy rabbit.
-
-Purring: Unlike cats, rabbits purr by gently grinding their teeth when content, especially during petting sessions.
-
-Flopping: A rabbit that suddenly flops onto its side is completely relaxed and feels safe in its environment.
-
-Aggressive or Unhappy Behaviors:
-
-Thumping: A loud thump with the hind legs signals fear, annoyance, or a warning to other rabbits about potential danger.
-
-Lunging or Boxing: These behaviors indicate the rabbit feels threatened and is defending itself.
-
-Grunting: Often accompanies aggressive behavior and signals displeasure or territorial feelings.
-
-Communication Behaviors:
-
-Chinning: Rabbits have scent glands under their chins and "chin" objects to mark their territory.
-
-Circling: Circling your feet usually indicates affection and sometimes hormonal behavior in unspayed/unneutered rabbits.
-
-Nudging: A gentle nose nudge is a rabbit's way of asking for attention or treats.
-
-Understanding these behaviors requires patience and observation. Each rabbit has a unique personality, and getting to know your individual bunny's communication style is key to a harmonious relationship. If you notice sudden behavioral changes, consult a rabbit-savvy veterinarian, as rabbits often hide illness until it's severe.""",
-            "author": "Amanda Sullivan, Rabbit Behavior Consultant",
-            "image_url": "https://images.unsplash.com/photo-1535241749838-299277b6305f",
-            "published_at": datetime.now() - timedelta(days=14),
-            "translations": {
-                "ru": {
-                    "title": "Понимание поведения кроликов: что ваш кролик пытается вам сказать",
-                    "summary": "Кролики общаются через тонкий язык тела. Научитесь расшифровывать поведение вашего кролика и укрепляйте вашу связь.",
-                    "content": """Кролики - сложные, выразительные животные с богатым словарем поведения. Понимание этих сигналов может помочь вам лучше удовлетворить потребности вашего кролика и углубить ваши отношения.
-
-Счастливое поведение:
-
-Бинкинг: когда кролик прыгает, крутится и пинается в воздухе, он выражает чистую радость. Это очаровательное поведение - признак счастливого, здорового кролика.
-
-Мурлыканье: в отличие от кошек, кролики мурлыкают, нежно скрипя зубами, когда довольны, особенно во время сеансов ласки.
-
-Плюхание: кролик, который внезапно плюхается на бок, полностью расслаблен и чувствует себя в безопасности в своей среде.
-
-Агрессивное или несчастное поведение:
-
-Топанье: громкий удар задними лапами сигнализирует о страхе, раздражении или предупреждении другим кроликам о потенциальной опасности.
-
-Бросок или бокс: эти поведения указывают на то, что кролик чувствует угрозу и защищается.
-
-Ворчание: часто сопровождает агрессивное поведение и сигнализирует о недовольстве или территориальных чувствах.
-
-Коммуникативное поведение:
-
-Подбородок: у кроликов есть запаховые железы под подбородком, и они "подбородком" метят предметы, чтобы пометить свою территорию.
-
-Кружение: кружение вокруг ваших ног обычно указывает на привязанность, а иногда и на гормональное поведение у нестерилизованных/некастрированных кроликов.
-
-Толчок: нежный толчок носом - это способ кролика просить внимания или угощений.
-
-Понимание этого поведения требует терпения и наблюдения. Каждый кролик имеет уникальную личность, и знакомство с индивидуальным стилем общения вашего кролика является ключом к гармоничным отношениям. Если вы заметите внезапные изменения в поведении, обратитесь к ветеринару, знакомому с кроликами, так как кролики часто скрывают болезнь, пока она не станет тяжелой."""
-                },
-                "hy": {
-                    "title": "Հասկանալով ճագարների վարքագիծը. ինչ է ձեր ճագարը փորձում ասել ձեզ",
-                    "summary": "Ճագարները հաղորդակցվում են նուար մարմնի լեզվով: Սովորեք վերծանել ձեր ճագարի վարքագիծը և ամրապնդեք ձեր կապը:",
-                    "content": """Ճագարները բարդ, արտահայտիչ կենդանիներ են՝ վարքագծերի հարուստ բառապաշարով: Այս ազդանշանները հասկանալը կարող է օգնել ձեզ ավելի լավ բավարարել ձեր ճագարի կարիքները և խորացնել ձեր հարաբերությունները:
-
-Ուրախ վարքագիծ.
-
-Բինկինգ. երբ ճագարը ցատկում է, ոլորվում և կռանում օդում, նա արտահայտում է մաքուր ուրախություն: Այս հրաշալի վարքագիծը երջանիկ, առողջ ճագարի նշան է:
-
-Մռռալը. ի տարբերություն կատուների, ճագարները մռռում են, քնքշորեն ատամները մանրացնելով, երբ բավարարված են, հատկապես փայփայման ժամանակ:
-
-Մեջքի վրա պառկելը. ճագարը, որը հանկարծակի մեջքի վրա է պառկում, ամբողջովին հանգստացած է և իրեն ապահով է զգում իր միջավայրում:
-
-Ագրեսիվ կամ դժգոհ վարքագիծ.
-
-Ծանր քայլեր. հետին ոտքերով բարձրաձայն հարվածը ազդանշան է վախի, գրգռվածության կամ այլ ճագարների համար նախազգուշացման պոտենցիալ վտանգի մասին:
-
-Լանջի կամ բռնցքամարտ. այս վարքագծերը ցույց են տալիս, որ ճագարը զգում է սպառնալիք և պաշտպանում է իրեն:
-
-Գռռալը. հաճախ ուղեկցում է ագրեսիվ վարքագծին և ազդանշանում է դժգոհություն կամ տարածքային զգացումներ:
-
-Հաղորդակցության վարքագիծ.
-
-Ծնոտի մազեր. ճագարները ունեն հոտի գեղձեր ծնոտի տակ և «ծնոտի» օբյեկտներ՝ իրենց տարածքը նշելու համար:
-
-Շրջապտույտ. ձեր ոտքերի շուրջը շրջապտույտը սովորաբար ցույց է տալիս սեր և երբեմն հորմոնալ վարքագիծ չստերիլիզացված/չկաստրացված ճագարների մոտ:
-
-Թեթև հրում. քնքուշ քթի հրումը ճագարի ձևն է ուշադրություն կամ համեղություններ խնդրելու համար:
-
-Այս վարքագծերը հասկանալը պահանջում է հանդուրժողականություն և դիտարկում: Յուրաքանչյուր ճագար ունի եզակի անհատականություն, և ձեր անհատական ճագարի հաղորդակցության ոճին ծանոթանալը բանալի է ներդաշնակ հարաբերությունների համար: Եթե նկատում եք վարքագծի հանկարծակի փոփոխություններ, խորհրդակցեք ճագարների մասնագետ անասնաբույժի հետ, քանի որ ճագարները հաճախ թաքցնում են հիվանդությունը, մինչև այն լինի ծանր:"""
-                }
-            }
-        },
-        {
-            "title": "Reptile Care 101: Essential Tips for Beginners",
-            "summary": "Thinking about getting a reptile? Here's what you need to know about habitat setup, feeding, and health care.",
-            "content": """Reptiles make unique and fascinating pets, but they have very different needs compared to traditional pets like dogs and cats. Before bringing home a reptile, it's essential to understand proper care requirements.
-
-Choosing the Right Species:
-For beginners, consider hardy species like Leopard Geckos, Corn Snakes, or Bearded Dragons. These reptiles are relatively forgiving and adapt well to captivity.
-
-Habitat Requirements:
-
-Temperature Control: Reptiles are ectothermic and rely on external heat sources. Most require both a basking spot (90-100°F) and a cooler area (75-80°F).
-
-Lighting: Many reptiles need UVB lighting for vitamin D3 synthesis and calcium absorption. Replace bulbs every 6-12 months as UVB output decreases.
-
-Humidity: Different species have different humidity needs. Tropical species need higher humidity (60-80%) while desert species need lower levels (30-40%).
-
-Substrate: Choose appropriate substrate for your species. Avoid loose substrates for young reptiles due to impaction risk.
-
-Feeding:
-Research your specific reptile's dietary needs. Some are carnivores requiring live insects or rodents, while others are herbivores or omnivores. Proper supplementation with calcium and vitamins is crucial.
-
-Health Monitoring:
-Regular observation is key. Warning signs include lethargy, loss of appetite, abnormal shedding, respiratory issues, or unusual behavior. Find a reptile veterinarian before you need one.
-
-Common Mistakes to Avoid:
-- Inadequate enclosure size
-- Improper temperature or humidity
-- Poor diet or lack of supplementation
-- Handling too much too soon
-- Mixing incompatible species
-
-With proper research, setup, and dedication, reptile keeping can be an incredibly rewarding hobby. These fascinating creatures offer a window into a different world and can live for many years with proper care.""",
-            "author": "Dr. Nathan Brooks, Herpetologist",
-            "image_url": "https://images.unsplash.com/photo-1503596476-1c12a8ba09a9",
-            "published_at": datetime.now() - timedelta(days=18),
-            "translations": {
-                "ru": {
-                    "title": "Уход за рептилиями 101: основные советы для начинающих",
-                    "summary": "Думаете о получении рептилии? Вот что вам нужно знать о настройке среды обитания, кормлении и уходе за здоровьем.",
-                    "content": """Рептилии делают уникальных и увлекательных домашних животных, но они имеют совершенно разные потребности по сравнению с традиционными домашними животными, такими как собаки и кошки. Прежде чем привести домой рептилию, важно понять правильные требования по уходу.
-
-Выбор правильного вида:
-Для начинающих рассмотрите выносливые виды, такие как Леопардовые гекконы, Кукурузные змеи или Бородатые агамы. Эти рептилии относительно снисходительны и хорошо адаптируются к неволе.
-
-Требования к среде обитания:
-
-Контроль температуры: рептилии экзотермичны и полагаются на внешние источники тепла. Большинство требует как места для обогрева (90-100°F), так и более прохладной области (75-80°F).
-
-Освещение: многие рептилии нуждаются в UVB освещении для синтеза витамина D3 и абсорбции кальция. Заменяйте лампы каждые 6-12 месяцев, так как выход UVB снижается.
-
-Влажность: разные виды имеют разные потребности во влажности. Тропические виды нуждаются в более высокой влажности (60-80%), в то время как пустынные виды нуждаются в более низких уровнях (30-40%).
-
-Субстрат: выберите подходящий субстрат для вашего вида. Избегайте рыхлых субстратов для молодых рептилий из-за риска закупорки.
-
-Кормление:
-Исследуйте диетические потребности вашей конкретной рептилии. Некоторые являются плотоядными, требующими живых насекомых или грызунов, в то время как другие являются травоядными или всеядными. Правильное добавление кальция и витаминов имеет решающее значение.
-
-Мониторинг здоровья:
-Регулярное наблюдение является ключевым. Предупреждающие знаки включают летаргию, потерю аппетита, аномальную линьку, респираторные проблемы или необычное поведение. Найдите ветеринара по рептилиям до того, как он понадобится.
-
-Общие ошибки, которых следует избегать:
-- Неадекватный размер вольера
-- Неправильная температура или влажность
-- Плохая диета или отсутствие добавок
-- Слишком много обработки слишком рано
-- Смешивание несовместимых видов
-
-При правильном исследовании, настройке и посвящении, содержание рептилий может быть невероятно вознаграждающим хобби. Эти увлекательные существа предлагают окно в другой мир и могут жить много лет при правильном уходе."""
-                },
-                "hy": {
-                    "title": "Սողունների խնամք 101. հիմնական խորհուրդներ սկսնակների համար",
-                    "summary": "Մտածում եք սողուն ստանալու մասին: Ահա այն, ինչ դուք պետք է իմանաք բնակավայրի կազմակերպման, կերակրման և առողջապահական խնամքի մասին:",
-                    "content": """Սողունները դարձնում են եզակի և հետաքրքիր ընտանի կենդանիներ, բայց դրանք ունեն շատ տարբեր կարիքներ՝ համեմատած ավանդական ընտանի կենդանիների հետ, ինչպիսիք են շները և կատուները: Սողունը տուն բերելուց առաջ կարևոր է հասկանալ ճիշտ խնամքի պահանջները:
-
-Ճիշտ տեսակի ընտրություն.
-Սկսնակների համար հաշվի առեք ամուր տեսակներ, ինչպիսիք են Leopard Geckos, Corn Snakes կամ Bearded Dragons: Այս սողունները համեմատաբար ներողամիտ են և լավ հարմարվում են գերությանը:
-
-Բնակավայրի պահանջներ.
-
-Ջերմաստիճանի վերահսկում. սողունները էկտոթերմ են և հենվում են արտաքին ջերմության աղբյուրների վրա: Մեծ մասը պահանջում է և՛ արևավորման վայր (90-100°F), և՛ ավելի սառը տարածք (75-80°F):
-
-Լուսավորություն. շատ սողունների կարիք ունեն UVB լուսավորության վիտամին D3 սինթեզի և կալցիումի ներծծման համար: Լամպերը փոխարինեք յուրաքանչյուր 6-12 ամիսը մեկ, քանի որ UVB արտադրությունը նվազում է:
-
-Խոնավություն. տարբեր տեսակներ ունեն տարբեր խոնավության կարիքներ: Արևադարձային տեսակներին անհրաժեշտ է ավելի բարձր խոնավություն (60-80%), մինչդեռ անապատային տեսակներին անհրաժեշտ է ավելի ցածր մակարդակներ (30-40%):
-
-Հիմք. ընտրեք համապատասխան հիմք ձեր տեսակի համար: Խուսափեք ազատ հիմքերից երիտասարդ սողունների համար պտղի վտանգի պատճառով:
-
-Կերակրում.
-Հետազոտեք ձեր կոնկրետ սողունի սննդային կարիքները: Ոմանք գիշատիչներ են, որոնք պահանջում են կենդանի միջատներ կամ կրծողներ, մինչդեռ մյուսները խոտակերներ կամ ամենակերներ են: Կալցիումի և վիտամինների պատշաճ հավելումը կարևոր է:
-
-Առողջության մոնիտորինգ.
-Կանոնավոր դիտարկումը բանալին է: Նախազգուշացման նշանները ներառում են դանդաղություն, ախորժակի կորուստ, աննորմալ թափվել, շնչառական խնդիրներ կամ անսովոր վարքագիծ: Գտեք սողունների անասնաբույժ նախքան այն ձեզ պետք գա:
-
-Սովորական սխալներ, որոնցից պետք է խուսափել.
-- Բավարար չափի վանդակ
-- Անպատշաջ ջերմաստիճան կամ խոնավություն
-- Վատ դիետա կամ հավելումների բացակայություն
-- Շատ շուտ շատ մշակում
-- Անհամատեղելի տեսակների խառնում
-
-Ճիշտ հետազոտությամբ, կազմակերպմամբ և նվիրվածությամբ, սողունների պահպանումը կարող է լինել անհավատալիորեն մրցակցային հոբբի: Այս հետաքրքիր արարածները պատուհան են առաջարկում տարբեր աշխարհ և կարող են ապրել շատ տարիներ ճիշտ խնամքով:"""
-                }
-            }
-        },
-        {
-            "title": "Spring Sale Announcement: Up to 40% Off Pet Supplies!",
-            "summary": "Don't miss our biggest sale of the year! Huge discounts on food, toys, accessories, and more for all types of pets.",
-            "content": """We're excited to announce our Annual Spring Sale with incredible savings across our entire store!
-
-Sale Highlights:
-
-• 40% off all premium pet foods
-• Buy 2 Get 1 Free on all toys
-• 30% off grooming supplies
-• 25% off cages, tanks, and habitats
-• Special bundles with up to 50% savings
-
-Featured Deals:
-
-Premium Dog Food: Now only $27.59 (was $45.99)
-Cat Water Fountain: $24.49 (was $34.99)
-Large Rabbit Hutch: $104.99 (was $149.99)
-Glass Terrarium 20-Gallon: $89.99 (was $119.99)
-
-Plus, free shipping on orders over $50!
-
-The sale runs from March 15-31, so don't wait! Stock up on essentials and treat your pets to something special. Shop online or visit our store location.
-
-Thank you for being part of our animal-loving community. Your pets deserve the best, and we're here to help you provide it at prices you'll love!""",
-            "author": "Animal Store Team",
-            "image_url": "https://images.unsplash.com/photo-1601758228041-f3b2795255f1",
-            "published_at": datetime.now() - timedelta(days=1),
-            "translations": {
-                "ru": {
-                    "title": "Объявление о весенней распродаже: скидки до 40% на товары для домашних животных!",
-                    "summary": "Не пропустите нашу самую большую распродажу года! Огромные скидки на корм, игрушки, аксессуары и многое другое для всех видов домашних животных.",
-                    "content": """Мы рады объявить нашу Ежегодную Весеннюю Распродажу с невероятными скидками по всему нашему магазину!
-
-Основные моменты распродажи:
-
-• 40% скидка на все премиальные корма для домашних животных
-• Купи 2 Получи 1 Бесплатно на все игрушки
-• 30% скидка на средства для груминга
-• 25% скидка на клетки, аквариумы и среды обитания
-• Специальные наборы со скидкой до 50%
-
-Избранные предложения:
-
-Премиум корм для собак: теперь всего $27.59 (было $45.99)
-Фонтан для кошек: $24.49 (было $34.99)
-Большая клетка для кроликов: $104.99 (было $149.99)
-Стеклянный террариум 20 галлонов: $89.99 (было $119.99)
-
-Плюс, бесплатная доставка на заказы свыше $50!
-
-Распродажа проходит с 15 по 31 марта, так что не ждите! Запаситесь необходимым и порадуйте своих питомцев чем-то особенным. Покупайте онлайн или посетите наш магазин.
-
-Спасибо, что являетесь частью нашего сообщества любителей животных. Ваши питомцы заслуживают лучшего, и мы здесь, чтобы помочь вам предоставить это по ценам, которые вам понравятся!"""
-                },
-                "hy": {
-                    "title": "Գարնանային վաճառքի հայտարարություն. մինչև 40% զեղչ ընտանի կենդանիների պարագաների վրա:",
-                    "summary": "Բաց մի թողեք մեր տարվա ամենամեծ վաճառքը: Հսկայական զեղչեր կերերի, խաղալիքների, աքսեսուարների և ավելի շատի վրա բոլոր տեսակի ընտանի կենդանիների համար:",
-                    "content": """Մենք ուրախ ենք հայտարարել մեր Տարեկան Գարնանային Վաճառքը՝ անհավատալի խնայողություններով մեր ամբողջ խանութում:
-
-Վաճառքի հիմնական կետերը.
-
-• 40% զեղչ բոլոր պրեմիում ընտանի կենդանիների կերերի վրա
-• Գնեք 2 Ստացեք 1 Անվճար բոլոր խաղալիքների վրա
-• 30% զեղչ խնամքի միջոցների վրա
-• 25% զեղչ վանդակների, ակվարիումների և բնակավայրերի վրա
-• Հատուկ խմբեր մինչև 50% խնայողություններով
-
-Առանձնացված առաջարկներ.
-
-Շների պրեմիում կեր. այժմ միայն $27.59 (էր $45.99)
-Կատուների ջրի շատրվան. $24.49 (էր $34.99)
-Ճագարների մեծ վանդակ. $104.99 (էր $149.99)
-Ապակե տերարիում 20 գալոն. $89.99 (էր $119.99)
-
-Գումարած, անվճար առաքում $50-ից ավելի պատվերների համար:
-
-Վաճառքը տևում է մարտի 15-ից մինչև 31-ը, այնպես որ մի սպասեք: Պաշարեք անհրաժեշտ իրերը և հաճույք պատճառեք ձեր կենդանիներին ինչ-որ հատուկ բանով: Գնումներ կատարեք առցանց կամ այցելեք մեր խանութի տեղը:
-
-Շնորհակալություն, որ մեր կենդանիներին սիրող համայնքի մի մասն եք: Ձեր ընտանի կենդանիները արժանի են լավագույնին, և մենք այստեղ ենք՝ օգնելու ձեզ ապահովել այն գներով, որոնք դուք կսիրեք:"""
-                }
-            }
-        },
-        {
-            "title": "New Arrivals: Premium Bird Supplies Now in Stock",
-            "summary": "We've just received a shipment of high-quality bird cages, toys, and nutrition products perfect for your feathered friends.",
-            "content": """Calling all bird enthusiasts! We're thrilled to announce the arrival of our new premium bird product line, featuring top-quality supplies from leading manufacturers.
-
-New Products Include:
-
-Spacious Aviaries:
-Multiple size options for single or multiple birds, featuring powder-coated steel construction and easy-access doors.
-
-Interactive Toy Collection:
-Puzzle feeders, foraging toys, and activity centers designed to keep birds mentally stimulated and physically active.
-
-Gourmet Nutrition Line:
-Species-specific food blends, organic treats, and vitamin supplements formulated by avian nutritionists.
-
-Perch Variety Pack:
-Natural wood perches in different diameters to promote foot health and prevent arthritis.
-
-Why Choose Our Premium Line?
-
-Quality Materials: All products are made from bird-safe, non-toxic materials.
-Expert Selection: Products chosen based on input from avian veterinarians and experienced bird keepers.
-Durability: Built to withstand even the strongest beaks and claws.
-Enrichment Focused: Designed to promote natural behaviors and prevent boredom.
-
-Visit our bird section to see the full collection. Our knowledgeable staff can help you choose the perfect products for your specific bird species. Remember, happy birds make happy owners!
-
-Limited quantities available, so come in soon to ensure you don't miss out on these exceptional products.""",
-            "author": "Animal Store Team",
-            "image_url": "https://images.unsplash.com/photo-1555169062-013468b47731",
-            "published_at": datetime.now() - timedelta(days=3),
-            "translations": {
-                "ru": {
-                    "title": "Новые поступления: премиальные товары для птиц теперь в наличии",
-                    "summary": "Мы только что получили партию высококачественных клеток, игрушек и продуктов питания для птиц, идеально подходящих для ваших пернатых друзей.",
-                    "content": """Всем энтузиастам птиц! Мы рады объявить о прибытии нашей новой премиальной линейки продуктов для птиц, включающей товары высшего качества от ведущих производителей.
-
-Новые продукты включают:
-
-Просторные вольеры:
-Несколько вариантов размеров для одной или нескольких птиц, с конструкцией из стали с порошковым покрытием и легкодоступными дверцами.
-
-Интерактивная коллекция игрушек:
-Пазловые кормушки, игрушки для поиска пищи и центры активности, разработанные для поддержания умственной стимуляции и физической активности птиц.
-
-Гурмэ линия питания:
-Специфические для видов смеси корма, органические лакомства и витаминные добавки, разработанные птичьими диетологами.
-
-Набор разнообразных насестов:
-Натуральные деревянные насесты разного диаметра для поддержания здоровья лап и предотвращения артрита.
-
-Почему выбирать нашу премиальную линию?
-
-Качественные материалы: все продукты сделаны из безопасных для птиц, нетоксичных материалов.
-Экспертный отбор: продукты выбраны на основе мнения птичьих ветеринаров и опытных птицеводов.
-Долговечность: построены, чтобы выдерживать даже самые сильные клювы и когти.
-Фокус на обогащение: разработаны для поощрения естественного поведения и предотвращения скуки.
-
-Посетите наш раздел для птиц, чтобы увидеть полную коллекцию. Наши знающие сотрудники могут помочь вам выбрать идеальные продукты для вашего конкретного вида птиц. Помните, счастливые птицы делают счастливых владельцев!
-
-Ограниченное количество в наличии, так что приходите скоро, чтобы убедиться, что вы не упустите эти исключительные продукты."""
-                },
-                "hy": {
-                    "title": "Նոր ժամանումներ. պրեմիում թռչունների պարագաներ այժմ պահեստում",
-                    "summary": "Մենք նոր ենք ստացել բարձրորակ թռչունների վանդակների, խաղալիքների և սնուցման ապրանքների առաքում, որոնք կատարյալ են ձեր փետրավոր ընկերների համար:",
-                    "content": """Բոլոր թռչունների սիրահարներին կոչ ենք անում: Մենք ուրախ ենք հայտարարել մեր նոր պրեմիում թռչունների արտադրանքի գծի ժամանման մասին, որը ներառում է առաջատար արտադրողների գլխավոր որակի պարագաները:
-
-Նոր արտադրանքները ներառում են.
-
-Ընդարձակ թռչնանոցներ.
-Մեկ կամ բազմաթիվ թռչունների համար բազմաթիվ չափի տարբերակներ՝ փոշի ծածկված պողպատե կառուցվածքով և հեշտ մուտքի դռներով:
-
-Ինտերակտիվ խաղալիքների հավաքածու.
-Խաղալիքներ՝ թռչունների մտավոր խթանում և ֆիզիկական ակտիվություն պահպանելու համար նախագծված:
-
-Գուրման սնուցման գիծ.
-Տեսակային կոնկրետ կերի խառնուրդներ, օրգանական համեղություններ և վիտամինային հավելումներ՝ ձևակերպված թռչունների սնուցման մասնագետների կողմից:
-
-Տարբեր տրամագծերի բնական փայտե նստատեղեր.
-Ոտքերի առողջությունը խթանելու և արթրիտը կանխելու համար:
-
-Ինչու ընտրել մեր պրեմիում գիծը.
-
-Որակյալ նյութեր. բոլոր արտադրանքները պատրաստված են թռչունների համար անվտանգ, ոչ թունավոր նյութերից:
-Փորձագիտական ընտրություն. արտադրանքներ ընտրված են թռչունների անասնաբույժների և փորձառու թռչունների պահապանների կողմից:
-Դիմացկունություն. կառուցված է դիմակայելու նույնիսկ ամենաուժեղ կտուցներին և ճանկերին:
-Հարստացման կենտրոնացում. նախագծված է խթանելու բնական վարքագիծը և կանխելու ձանձրույթը:
-
-Այցելեք մեր թռչունների բաժինը՝ ամբողջական հավաքածուն տեսնելու համար: Մեր գիտելիքներով անձնակազմը կարող է օգնել ձեզ ընտրել կատարյալ արտադրանքը ձեր կոնկրետ թռչունի տեսակի համար: Հիշեք, երջանիկ թռչունները երջանիկ տերեր են դարձնում:
-
-Սահմանափակ քանակություններ առկա են, այնպես որ արագ գալու համար համոզվեք, որ չեք բաց թողնի այս բացառիկ արտադրանքները:"""
-                }
-            }
+            ]
         }
     ]
     
     news_objects = []
     for news_item in news_data:
-        translations = news_item.pop("translations")
-        news = News(**news_item)
+        translations = news_item.pop("translations", {})
+        features = news_item.pop("features", [])
+        author_name = news_item.pop("author")
+        # News model accepts title, image_url, author_id, published_at
+        _summary = news_item.pop("summary", None)
+        _content = news_item.pop("content", None)
+        news = News(
+            title=news_item.get("title"),
+            image_url=news_item.get("image_url"),
+            published_at=news_item.get("published_at"),
+            author_id=author_dict.get(author_name)
+        )
         db.add(news)
         db.flush()
         
@@ -1374,14 +1093,35 @@ Limited quantities available, so come in soon to ensure you don't miss out on th
             translation = NewsTranslation(
                 news_id=news.id,
                 language=LanguageEnum(lang),
-                **trans_data
+                title=trans_data.get("title"),
+                description=trans_data.get("summary") or trans_data.get("content")
             )
             db.add(translation)
+        
+        # Add features
+        for feature_data in features:
+            feature_translations = feature_data.pop("translations", {})
+            feature = NewsFeatures(
+                news_id=news.id,
+                title=feature_data.get("title")
+            )
+            db.add(feature)
+            db.flush()
+            
+            # Add feature translations
+            for lang, trans_data in feature_translations.items():
+                feature_translation = NewsFeaturesTranslation(
+                    feature_id=feature.id,
+                    language=LanguageEnum(lang),
+                    title=trans_data.get("title"),
+                    description=trans_data.get("description")
+                )
+                db.add(feature_translation)
         
         news_objects.append(news)
     
     db.commit()
-    print(f"✅ Created {len(news_data)} news articles with translations")
+    print(f"✅ Created {len(news_data)} news articles with translations and features")
     return news_objects
 
 def main():
@@ -1397,41 +1137,47 @@ def main():
         # Clear existing data
         clear_database(db)
         
-        print()
-        
         # Seed data in order
         seed_users(db)
+        print("✅ Users created")
+
+        types = seed_animal_types(db)
         print()
-        
-        species = seed_animal_species(db)
-        print()
-        
+
         categories = seed_categories(db)
         print()
-        
-        seed_products(db, species, categories)
+
+        authors = seed_authors(db)
+        print()
+
+        products = seed_products(db, types, categories)
+        print()
+
+        news = seed_news(db, authors)
         print()
         
-        seed_news(db)
-        print()
-        
-        print("="*60)
-        print("✨ DATABASE SEEDING COMPLETED SUCCESSFULLY!")
-        print("="*60)
-        print("\n📊 Summary:")
-        print(f"   • Users: {db.query(User).count()}")
-        print(f"   • Animal Species: {db.query(AnimalSpecies).count()}")
-        print(f"   • Categories: {db.query(ProductCategory).count()}")
-        print(f"   • Products: {db.query(Product).count()}")
-        print(f"   • News Articles: {db.query(News).count()}")
-        print("\n🔐 Login Credentials:")
-        print("   Admin: admin / admin123")
-        print("   User: john_doe / password123")
-        print("\n🚀 You can now start the server with: python main.py")
-        print("   API Documentation: http://localhost:8000/docs\n")
+        # print("="*60)
+        # print("✨ DATABASE SEEDING COMPLETED SUCCESSFULLY!")
+        # print("="*60)
+        # print("\n📊 Summary:")
+        # print(f"   • Users: {db.query(User).count()}")
+        # print(f"   • Animal Species: {db.query(AnimalTypes).count()}")
+        # print(f"   • Categories: {db.query(ProductCategory).count()}")
+        # print(f"   • Authors: {db.query(NewsAuthor).count()}")
+        # print(f"   • Products: {db.query(Product).count()}")
+        # print(f"   • Product Features: {db.query(ProductFeatures).count()}")
+        # print(f"   • News Articles: {db.query(News).count()}")
+        # print(f"   • News Features: {db.query(NewsFeatures).count()}")
+        # print("\n🔐 Login Credentials:")
+        # print("   Admin: admin / admin123")
+        # print("   User: john_doe / password123")
+        # print("\n🚀 You can now start the server with: python main.py")
+        # print("   API Documentation: http://localhost:8000/docs\n")
         
     except Exception as e:
         print(f"\n❌ Error seeding database: {str(e)}")
+        import traceback
+        traceback.print_exc()
         db.rollback()
     finally:
         db.close()

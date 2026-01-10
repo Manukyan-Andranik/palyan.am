@@ -1,3 +1,5 @@
+import asyncio
+
 from typing import Optional, List
 from fastapi import FastAPI, HTTPException, Depends, status, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +13,7 @@ from db import (
     User, UserCreate, UserResponse, Token,
     AnimalTypes, AnimalTypesCreate, AnimalTypesUpdate, AnimalTypesTranslation,
     ProductCategory, ProductCategoryCreate, ProductCategoryUpdate, ProductCategoryTranslation,
+    ProductSubcategory, ProductSubcategoryCreate, ProductSubcategoryUpdate, ProductSubcategoryTranslation,
     Product, ProductCreate, ProductUpdate, ProductTranslation, 
     ProductFeature, ProductFeatureTranslation,
     News, NewsCreate, NewsUpdate, NewsTranslation, NewsFeatures, NewsFeaturesTranslation, NewsAuthor
@@ -20,33 +23,47 @@ import schemas
 
 # ---------------- INIT ----------------
 # Ensure tables exist
-with engine.begin() as conn:
-    # Drop all tables with CASCADE
-    conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS animal_types CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS animal_types_translations CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS product_categories CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS product_categories_translations CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS products CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS product_translations CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS product_features CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS product_features_translations CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS news_authors CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS news_author_translations CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS news CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS news_translations CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS news_features CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS news_features_translations CASCADE"))
-Base.metadata.create_all(bind=engine)
+# with engine.begin() as conn:
+#     # Drop all tables with CASCADE
+#     conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS animal_types CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS animal_types_translations CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS product_categories CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS product_categories_translations CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS products CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS product_translations CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS product_features CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS product_features_translations CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS news_authors CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS news_author_translations CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS news CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS news_translations CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS news_features CASCADE"))
+#     conn.execute(text("DROP TABLE IF EXISTS news_features_translations CASCADE"))
 
-fastapi_app = FastAPI(title="Veterinary Pharmacy API", version="2.0.0")
+# Base.metadata.create_all(bind=engine)
+
+from fastapi.middleware.cors import CORSMiddleware
+
+fastapi_app = FastAPI(
+    title="Veterinary Pharmacy API",
+    description="API for veterinary drugs and pet supplies store",
+    version="2.0.0",
+    root_path="/api",
+)
 
 fastapi_app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://palyan.onrender.com",
+        "https://palyan.am"
+    ],    
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
@@ -145,28 +162,138 @@ def get_type(id: int, lang: Optional[str] = None, db: Session = Depends(get_db))
 # --- Categories ---
 @fastapi_app.get("/categories", tags=["public"])
 def list_categories(lang: Optional[str] = None, db: Session = Depends(get_db)):
-    items = db.query(ProductCategory).options(joinedload(ProductCategory.translations)).all()
-    return [AppHelpers.apply_language_filter(i, lang) for i in items]
+    items = db.query(ProductCategory)\
+        .options(
+            joinedload(ProductCategory.translations),
+            joinedload(ProductCategory.subcategories).joinedload(ProductSubcategory.translations)
+        ).order_by(ProductCategory.id).all()
+    
+    result = []
+    for item in items:
+        # Build name map
+        name_map = {}
+        for trans in item.translations:
+            name_map[trans.language.value] = trans.name
+        
+        # If lang is specified, flatten to just that language
+        if lang and lang in name_map:
+            category_name = name_map[lang]
+        else:
+            category_name = name_map
+        
+        # Build subcategories
+        subcats = []
+        for sc in item.subcategories:
+            subcat_name_map = {}
+            for trans in sc.translations:
+                subcat_name_map[trans.language.value] = trans.name
+            
+            # If lang is specified, flatten to just that language
+            if lang and lang in subcat_name_map:
+                subcat_name = subcat_name_map[lang]
+            else:
+                subcat_name = subcat_name_map
+            
+            subcats.append({
+                "id": sc.id,
+                "name": subcat_name
+            })
+        
+        result.append({
+            "id": item.id,
+            "name": category_name,
+            "subcategories": subcats
+        })
+    return result
 
 @fastapi_app.get("/categories/{id}", tags=["public"])
 def get_category(id: int, lang: Optional[str] = None, db: Session = Depends(get_db)):
     item = db.query(ProductCategory)\
-        .options(joinedload(ProductCategory.translations))\
+        .options(
+            joinedload(ProductCategory.translations),
+            joinedload(ProductCategory.subcategories).joinedload(ProductSubcategory.translations)
+        )\
         .filter(ProductCategory.id == id)\
         .first()
     if not item:
         raise HTTPException(404, "Category not found")
-    return AppHelpers.apply_language_filter(item, lang)
+    
+    # Build name map
+    name_map = {}
+    for trans in item.translations:
+        name_map[trans.language.value] = trans.name
+    
+    # If lang is specified, flatten to just that language
+    if lang and lang in name_map:
+        category_name = name_map[lang]
+    else:
+        category_name = name_map
+    
+    # Build subcategories
+    subcats = []
+    for sc in item.subcategories:
+        subcat_name_map = {}
+        for trans in sc.translations:
+            subcat_name_map[trans.language.value] = trans.name
+        
+        # If lang is specified, flatten to just that language
+        if lang and lang in subcat_name_map:
+            subcat_name = subcat_name_map[lang]
+        else:
+            subcat_name = subcat_name_map
+        
+        subcats.append({
+            "id": sc.id,
+            "name": subcat_name
+        })
+    
+    return {
+        "id": item.id,
+        "name": category_name,
+        "subcategories": subcats
+    }
 
 # --- Products ---
 @fastapi_app.get("/products", tags=["public"])
-def list_products(lang: Optional[str] = None, db: Session = Depends(get_db)):
-    items = db.query(Product)\
-        .options(
-            joinedload(Product.translations),
-            joinedload(Product.features).joinedload(ProductFeature.translations)
-        )\
-        .all()
+def list_products(
+    lang: Optional[str] = None,
+    category_id: Optional[int] = None,
+    subcategory_id: Optional[int] = None,
+    types_id: Optional[int] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 20,
+    db: Session = Depends(get_db),
+):
+    """
+    List products with optional filters:
+    - category_id, subcategory_id, types_id
+    - search (partial match against fallback product.name)
+    - pagination via page & per_page
+    """
+    query = db.query(Product).options(
+        joinedload(Product.translations),
+        joinedload(Product.features).joinedload(ProductFeature.translations),
+    )
+
+    if category_id is not None:
+        query = query.filter(Product.category_id == category_id)
+    if subcategory_id is not None:
+        query = query.filter(Product.subcategory_id == subcategory_id)
+    if types_id is not None:
+        query = query.filter(Product.types_id == types_id)
+    if search:
+        # Search against fallback name; optionally could join translations for i18n search
+        like_str = f"%{search}%"
+        query = query.filter(Product.name.ilike(like_str))
+
+    # Pagination
+    if page < 1:
+        page = 1
+    if per_page < 1:
+        per_page = 20
+
+    items = query.offset((page - 1) * per_page).limit(per_page).all()
     return [AppHelpers.apply_language_filter(i, lang) for i in items]
 
 @fastapi_app.get("/products/{id}", tags=["public"])
@@ -248,11 +375,34 @@ def delete_type(id: int, db: Session = Depends(get_db), _: User = Depends(get_ad
 # --- Categories ---
 @fastapi_app.post("/admin/categories", tags=["admin"])
 def create_category(data: ProductCategoryCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
-    db_obj = ProductCategory(name=data.name)
+    # Extract fallback name from multilingual dict
+    fallback_name = next(iter(data.name.values())) if data.name else ""
+    
+    # Create category
+    db_obj = ProductCategory(name=fallback_name)
     db.add(db_obj)
+    db.flush()
+    
+    # Add category translations (name is multilingual dict)
+    AppHelpers.save_translations(db, db_obj, data.name, ProductCategoryTranslation, "category_id", name_field="name")
+    
+    # Add subcategories if provided
+    if data.subcategories:
+        for subcat_data in data.subcategories:
+            # Extract name from multilingual dict
+            subcat_name_dict = subcat_data.get("name", {})
+            subcat_fallback_name = next(iter(subcat_name_dict.values())) if isinstance(subcat_name_dict, dict) and subcat_name_dict else ""
+            
+            subcat = ProductSubcategory(category_id=db_obj.id, name=subcat_fallback_name)
+            db.add(subcat)
+            db.flush()
+            
+            # Add subcategory translations (name is multilingual dict)
+            if isinstance(subcat_name_dict, dict) and subcat_name_dict:
+                AppHelpers.save_translations(db, subcat, subcat_name_dict, ProductSubcategoryTranslation, "subcategory_id", name_field="name")
+    
     db.commit()
     db.refresh(db_obj)
-    AppHelpers.save_translations(db, db_obj, data.translations, ProductCategoryTranslation, "category_id")
     return AppHelpers.apply_language_filter(db_obj)
 
 @fastapi_app.put("/admin/categories/{id}", tags=["admin"])
@@ -261,12 +411,34 @@ def update_category(id: int, data: ProductCategoryUpdate, db: Session = Depends(
     if not db_obj: 
         raise HTTPException(404, "Not found")
     
-    if data.name: 
-        db_obj.name = data.name
-    db.commit()
+    # Update name if provided (multilingual dict)
+    if data.name:
+        # Update fallback name from first value
+        fallback_name = next(iter(data.name.values())) if data.name else ""
+        db_obj.name = fallback_name
+        # Update translations
+        AppHelpers.save_translations(db, db_obj, data.name, ProductCategoryTranslation, "category_id", name_field="name")
     
-    if data.translations:
-        AppHelpers.save_translations(db, db_obj, data.translations, ProductCategoryTranslation, "category_id")
+    # Update subcategories if provided
+    if data.subcategories is not None:
+        # Delete existing subcategories and recreate
+        db.query(ProductSubcategory).filter(ProductSubcategory.category_id == db_obj.id).delete(synchronize_session=False)
+        
+        for subcat_data in data.subcategories:
+            # Extract name from multilingual dict
+            subcat_name_dict = subcat_data.get("name", {})
+            subcat_fallback_name = next(iter(subcat_name_dict.values())) if isinstance(subcat_name_dict, dict) and subcat_name_dict else ""
+            
+            subcat = ProductSubcategory(category_id=db_obj.id, name=subcat_fallback_name)
+            db.add(subcat)
+            db.flush()
+            
+            # Add subcategory translations (name is multilingual dict)
+            if isinstance(subcat_name_dict, dict) and subcat_name_dict:
+                AppHelpers.save_translations(db, subcat, subcat_name_dict, ProductSubcategoryTranslation, "subcategory_id", name_field="name")
+    
+    db.commit()
+    db.refresh(db_obj)
     return AppHelpers.apply_language_filter(db_obj)
 
 @fastapi_app.delete("/admin/categories/{id}", tags=["admin"])
@@ -278,67 +450,223 @@ def delete_category(id: int, db: Session = Depends(get_db), _: User = Depends(ge
     db.commit()
     return {"status": "deleted"}
 
+# --- Subcategories ---
+@fastapi_app.post("/admin/subcategories", tags=["admin"])
+def create_subcategory(data: ProductSubcategoryCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    # Verify category exists
+    category = db.get(ProductCategory, data.category_id)
+    if not category:
+        raise HTTPException(404, "Category not found")
+    
+    # Extract fallback name from multilingual dict
+    fallback_name = next(iter(data.name.values())) if data.name else ""
+    
+    # Create subcategory
+    db_obj = ProductSubcategory(category_id=data.category_id, name=fallback_name)
+    db.add(db_obj)
+    db.flush()
+    
+    # Add translations (name is multilingual dict)
+    AppHelpers.save_translations(db, db_obj, data.name, ProductSubcategoryTranslation, "subcategory_id", name_field="name")
+    
+    db.commit()
+    db.refresh(db_obj)
+    return AppHelpers.apply_language_filter(db_obj)
+
+@fastapi_app.put("/admin/subcategories/{id}", tags=["admin"])
+def update_subcategory(id: int, data: ProductSubcategoryUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(ProductSubcategory, id)
+    if not db_obj:
+        raise HTTPException(404, "Not found")
+    
+    # Update name if provided (multilingual dict)
+    if data.name:
+        # Update fallback name from first value
+        fallback_name = next(iter(data.name.values())) if data.name else ""
+        db_obj.name = fallback_name
+        # Update translations
+        AppHelpers.save_translations(db, db_obj, data.name, ProductSubcategoryTranslation, "subcategory_id", name_field="name")
+    
+    db.commit()
+    db.refresh(db_obj)
+    return AppHelpers.apply_language_filter(db_obj)
+
+@fastapi_app.delete("/admin/subcategories/{id}", tags=["admin"])
+def delete_subcategory(id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    db_obj = db.get(ProductSubcategory, id)
+    if not db_obj:
+        raise HTTPException(404, "Not found")
+    db.delete(db_obj)
+    db.commit()
+    return {"status": "deleted"}
+
 # --- Products ---
 @fastapi_app.post("/admin/products", tags=["admin"])
 def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
-    # 1. Create Product (price, types_id, category_id can be None)
+    # Extract name from multilingual dict (use first available value as fallback)
+    fallback_name = ""
+    if product_in.name and isinstance(product_in.name, dict):
+        fallback_name = next(iter(product_in.name.values())) if product_in.name else ""
+    elif isinstance(product_in.name, str):
+        fallback_name = product_in.name
+    
+    # 1. Create Product
     new_product = Product(
-        name=product_in.name,
+        name=fallback_name,
         price=product_in.price,
         stock=product_in.stock,
         manufacturer=product_in.manufacturer,
         image_url=product_in.image_url,
         is_new=product_in.is_new,
         types_id=product_in.types_id,
-        category_id=product_in.category_id
+        category_id=product_in.category_id,
+        subcategory_id=product_in.subcategory_id
     )
     db.add(new_product)
     db.flush()  # Populates new_product.id
 
-    # 2. Add Translations
-    for lang, trans_data in product_in.translations.items():
-        db.add(ProductTranslation(
-            product_id=new_product.id,
-            language=lang,
-            name=trans_data.name,
-            description=trans_data.description
-        ))
+    # 2. Add Translations for name and description
+    if product_in.name and isinstance(product_in.name, dict):
+        AppHelpers.save_translations(db, new_product, product_in.name, ProductTranslation, "product_id", name_field="name")
+    
+    # Description is required, so always save it
+    if product_in.description and isinstance(product_in.description, dict):
+        AppHelpers.save_translations(db, new_product, product_in.description, ProductTranslation, "product_id", name_field="description")
 
     # 3. Add Features
-    for feature_in in product_in.features:
-        new_feature = ProductFeature(
-            product_id=new_product.id,
-            title=feature_in.title
-        )
-        db.add(new_feature)
-        db.flush()
+    if product_in.features:
+        for feature_in in product_in.features:
+            f_title = feature_in.get("title") if isinstance(feature_in, dict) else None
+            f_description = feature_in.get("description") if isinstance(feature_in, dict) else None
+            
+            # If title is a dict (multilingual), use first value as fallback
+            if isinstance(f_title, dict):
+                f_title_fallback = next(iter(f_title.values())) if f_title else ""
+                f_title_trans = f_title
+            else:
+                f_title_fallback = f_title or ""
+                f_title_trans = None
+            
+            # If description is a dict (multilingual), use first value as fallback
+            if isinstance(f_description, dict):
+                f_description_fallback = next(iter(f_description.values())) if f_description else None
+                f_description_trans = f_description
+            else:
+                f_description_fallback = f_description
+                f_description_trans = None
+            
+            new_feature = ProductFeature(
+                product_id=new_product.id,
+                title=f_title_fallback
+            )
+            db.add(new_feature)
+            db.flush()
 
-        for lang, f_trans in feature_in.translations.items():
-            db.add(ProductFeatureTranslation(
-                feature_id=new_feature.id,
-                language=lang,
-                title=f_trans.title,
-                description=f_trans.description
-            ))
+            # Add title translations
+            if f_title_trans and isinstance(f_title_trans, dict):
+                AppHelpers.save_translations(db, new_feature, f_title_trans, ProductFeatureTranslation, "feature_id", name_field="title")
+            
+            # Add description translations
+            if f_description_trans and isinstance(f_description_trans, dict):
+                AppHelpers.save_translations(db, new_feature, f_description_trans, ProductFeatureTranslation, "feature_id", name_field="description")
 
     db.commit()
     db.refresh(new_product)
     return AppHelpers.apply_language_filter(new_product)
 
 @fastapi_app.put("/admin/products/{id}", tags=["admin"])
-def update_product(id: int, data: ProductUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+def update_product(id: int, data: schemas.ProductUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     db_obj = db.get(Product, id)
     if not db_obj: 
         raise HTTPException(404, "Not found")
     
-    update_data = data.dict(exclude={"translations"}, exclude_unset=True)
+    # Update scalar fields (only those provided, excluding name and description which are translations)
+    update_data = data.dict(exclude={"name", "description", "features"}, exclude_unset=True)
     for key, value in update_data.items():
-        setattr(db_obj, key, value)
-    
+        if value is not None:
+            setattr(db_obj, key, value)
+
+    # Handle name translations: if name dict provided, sync translations for ProductTranslation
+    if data.name and isinstance(data.name, dict):
+        AppHelpers.save_translations(db, db_obj, data.name, ProductTranslation, "product_id", name_field="name")
+
+    # Handle description translations: if description dict provided, sync translations for ProductTranslation
+    if data.description and isinstance(data.description, dict):
+        AppHelpers.save_translations(db, db_obj, data.description, ProductTranslation, "product_id", name_field="description")
+
+    # Handle features: create, update, delete
+    # If features is provided (even empty list), sync features to match client-provided list
+    if data.features is not None:
+        incoming = data.features or []
+
+        # Load existing features from DB
+        existing_features = db.query(ProductFeature).filter(ProductFeature.product_id == db_obj.id).all()
+        existing_by_id = {f.id: f for f in existing_features}
+
+        incoming_ids = set()
+
+        for f_in in incoming:
+            # accept dict-like format
+            f_id = f_in.get("id") if isinstance(f_in, dict) else None
+            f_title = f_in.get("title") if isinstance(f_in, dict) else None
+            f_description = f_in.get("description") if isinstance(f_in, dict) else None
+            f_trans_title = None
+            f_trans_desc = None
+
+            # If title is a dict (multilingual), use it as translations for title field
+            if isinstance(f_title, dict):
+                f_trans_title = f_title
+                # Use first language value as fallback title
+                f_title = next(iter(f_title.values())) if f_title else None
+
+            # If description is a dict (multilingual), use it as translations for description field
+            if isinstance(f_description, dict):
+                f_trans_desc = f_description
+                # Use first language value as fallback description
+                f_description = next(iter(f_description.values())) if f_description else None
+
+            if f_id:
+                incoming_ids.add(f_id)
+                feature_obj = existing_by_id.get(f_id) or db.get(ProductFeature, f_id)
+                if not feature_obj:
+                    continue
+                
+                # Update title if provided
+                if f_title is not None:
+                    feature_obj.title = f_title
+                
+                db.flush()
+                
+                # Update title translations
+                if f_trans_title and isinstance(f_trans_title, dict):
+                    AppHelpers.save_translations(db, feature_obj, f_trans_title, ProductFeatureTranslation, "feature_id", name_field="title")
+                
+                # Update description translations
+                if f_trans_desc and isinstance(f_trans_desc, dict):
+                    AppHelpers.save_translations(db, feature_obj, f_trans_desc, ProductFeatureTranslation, "feature_id", name_field="description")
+            else:
+                # Create new feature
+                new_feature = ProductFeature(product_id=db_obj.id, title=f_title or "")
+                db.add(new_feature)
+                db.flush()
+                
+                # Add title translations if provided
+                if f_trans_title and isinstance(f_trans_title, dict):
+                    AppHelpers.save_translations(db, new_feature, f_trans_title, ProductFeatureTranslation, "feature_id", name_field="title")
+                
+                # Add description translations if provided
+                if f_trans_desc and isinstance(f_trans_desc, dict):
+                    AppHelpers.save_translations(db, new_feature, f_trans_desc, ProductFeatureTranslation, "feature_id", name_field="description")
+
+        # Delete features that are not present in incoming_ids
+        for existing in existing_features:
+            if existing.id not in incoming_ids:
+                db.delete(existing)
+
+    # Final commit and refresh
     db.commit()
-    if data.translations:
-        AppHelpers.save_translations(db, db_obj, data.translations, ProductTranslation, "product_id")
-        
+    db.refresh(db_obj)
+
     return AppHelpers.apply_language_filter(db_obj)
 
 @fastapi_app.delete("/admin/products/{id}", tags=["admin"])
@@ -351,51 +679,169 @@ def delete_product(id: int, db: Session = Depends(get_db), _: User = Depends(get
     return {"status": "deleted"}
 
 # --- News ---
+
 @fastapi_app.post("/admin/news", tags=["admin"])
-def create_news(data: NewsCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
-    # Core News
-    db_obj = News(title=data.title, image_url=data.image_url, author_id=data.author_id)
-    db.add(db_obj)
-    db.commit()
-    db.refresh(db_obj)
-
-    # Translations
-    AppHelpers.save_translations(db, db_obj, data.translations, NewsTranslation, "news_id")
+def create_news(data: schemas.NewsCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+    # Extract name/title from multilingual dict (use first available value as fallback)
+    fallback_name = ""
+    if data.name and isinstance(data.name, dict):
+        fallback_name = next(iter(data.name.values())) if data.name else ""
+    elif isinstance(data.name, str):
+        fallback_name = data.name
     
-    # Features (if any)
-    if data.features:
-        for feat in data.features:
-            db_feat = NewsFeatures(news_id=db_obj.id, title=feat.get("title", ""))
-            db.add(db_feat)
-            db.commit()
-            db.refresh(db_feat)
-            AppHelpers.save_translations(db, db_feat, feat.get("translations", {}), NewsFeaturesTranslation, "feature_id")
+    # 1. Create core News
+    news_obj = News(
+        title=fallback_name,
+        image_url=data.image_url,
+        author_id=data.author_id
+    )
+    db.add(news_obj)
+    db.flush()  # Populate news_obj.id
 
-    return AppHelpers.apply_language_filter(db_obj)
+    # 2. Add Translations for name/title and description
+    if data.name and isinstance(data.name, dict):
+        AppHelpers.save_translations(db, news_obj, data.name, NewsTranslation, "news_id", name_field="title")
+    
+    if data.description and isinstance(data.description, dict):
+        AppHelpers.save_translations(db, news_obj, data.description, NewsTranslation, "news_id", name_field="description")
+
+    # 3. Add features and their translations
+    if data.features:
+        for feature_in in data.features:
+            f_title = feature_in.get("title") if isinstance(feature_in, dict) else None
+            f_description = feature_in.get("description") if isinstance(feature_in, dict) else None
+            
+            # If title is a dict (multilingual), use first value as fallback
+            if isinstance(f_title, dict):
+                f_title_fallback = next(iter(f_title.values())) if f_title else ""
+                f_title_trans = f_title
+            else:
+                f_title_fallback = f_title or ""
+                f_title_trans = None
+            
+            # If description is a dict (multilingual), use first value as fallback
+            if isinstance(f_description, dict):
+                f_description_fallback = next(iter(f_description.values())) if f_description else None
+                f_description_trans = f_description
+            else:
+                f_description_fallback = f_description
+                f_description_trans = None
+            
+            feature_obj = NewsFeatures(news_id=news_obj.id, title=f_title_fallback)
+            db.add(feature_obj)
+            db.flush()
+
+            # Add title translations
+            if f_title_trans and isinstance(f_title_trans, dict):
+                AppHelpers.save_translations(db, feature_obj, f_title_trans, NewsFeaturesTranslation, "feature_id", name_field="title")
+            
+            # Add description translations
+            if f_description_trans and isinstance(f_description_trans, dict):
+                AppHelpers.save_translations(db, feature_obj, f_description_trans, NewsFeaturesTranslation, "feature_id", name_field="description")
+
+    db.commit()
+    db.refresh(news_obj)
+    return AppHelpers.apply_language_filter(news_obj)
+
 
 @fastapi_app.put("/admin/news/{id}", tags=["admin"])
-def update_news(id: int, data: NewsUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
+def update_news(id: int, data: schemas.NewsUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     db_obj = db.get(News, id)
-    if not db_obj: 
+    if not db_obj:
         raise HTTPException(404, "Not found")
-    
-    if data.title: 
-        db_obj.title = data.title
-    if data.image_url: 
-        db_obj.image_url = data.image_url
-    if data.author_id: 
-        db_obj.author_id = data.author_id
-    
+
+    # Update scalar fields (excluding multilingual fields)
+    update_data = data.dict(exclude={"name", "description", "features"}, exclude_unset=True)
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(db_obj, key, value)
+
+    # Handle name/title translations: if name dict provided, sync translations for NewsTranslation
+    if data.name and isinstance(data.name, dict):
+        AppHelpers.save_translations(db, db_obj, data.name, NewsTranslation, "news_id", name_field="title")
+
+    # Handle description translations: if description dict provided, sync translations for NewsTranslation
+    if data.description and isinstance(data.description, dict):
+        AppHelpers.save_translations(db, db_obj, data.description, NewsTranslation, "news_id", name_field="description")
+
+    # Handle features: create, update, delete
+    if data.features is not None:
+        incoming = data.features or []
+
+        # Load existing features from DB
+        existing_features = db.query(NewsFeatures).filter(NewsFeatures.news_id == db_obj.id).all()
+        existing_by_id = {f.id: f for f in existing_features}
+
+        incoming_ids = set()
+
+        for f_in in incoming:
+            # accept dict-like format
+            f_id = f_in.get("id") if isinstance(f_in, dict) else None
+            f_title = f_in.get("title") if isinstance(f_in, dict) else None
+            f_description = f_in.get("description") if isinstance(f_in, dict) else None
+            f_trans_title = None
+            f_trans_desc = None
+
+            # If title is a dict (multilingual), use it as translations for title field
+            if isinstance(f_title, dict):
+                f_trans_title = f_title
+                # Use first language value as fallback title
+                f_title = next(iter(f_title.values())) if f_title else None
+
+            # If description is a dict (multilingual), use it as translations for description field
+            if isinstance(f_description, dict):
+                f_trans_desc = f_description
+                # Use first language value as fallback description
+                f_description = next(iter(f_description.values())) if f_description else None
+
+            if f_id:
+                incoming_ids.add(f_id)
+                feature_obj = existing_by_id.get(f_id) or db.get(NewsFeatures, f_id)
+                if not feature_obj:
+                    continue
+                
+                # Update title if provided
+                if f_title is not None:
+                    feature_obj.title = f_title
+                
+                db.flush()
+                
+                # Update title translations
+                if f_trans_title and isinstance(f_trans_title, dict):
+                    AppHelpers.save_translations(db, feature_obj, f_trans_title, NewsFeaturesTranslation, "feature_id", name_field="title")
+                
+                # Update description translations
+                if f_trans_desc and isinstance(f_trans_desc, dict):
+                    AppHelpers.save_translations(db, feature_obj, f_trans_desc, NewsFeaturesTranslation, "feature_id", name_field="description")
+            else:
+                # Create new feature
+                new_feature = NewsFeatures(news_id=db_obj.id, title=f_title or "")
+                db.add(new_feature)
+                db.flush()
+                
+                # Add title translations if provided
+                if f_trans_title and isinstance(f_trans_title, dict):
+                    AppHelpers.save_translations(db, new_feature, f_trans_title, NewsFeaturesTranslation, "feature_id", name_field="title")
+                
+                # Add description translations if provided
+                if f_trans_desc and isinstance(f_trans_desc, dict):
+                    AppHelpers.save_translations(db, new_feature, f_trans_desc, NewsFeaturesTranslation, "feature_id", name_field="description")
+
+        # Delete features that are not present in incoming_ids
+        for existing in existing_features:
+            if existing.id not in incoming_ids:
+                db.delete(existing)
+
+    # Final commit and refresh
     db.commit()
-    if data.translations:
-        AppHelpers.save_translations(db, db_obj, data.translations, NewsTranslation, "news_id")
-        
+    db.refresh(db_obj)
     return AppHelpers.apply_language_filter(db_obj)
+
 
 @fastapi_app.delete("/admin/news/{id}", tags=["admin"])
 def delete_news(id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     db_obj = db.get(News, id)
-    if not db_obj: 
+    if not db_obj:
         raise HTTPException(404, "Not found")
     db.delete(db_obj)
     db.commit()
@@ -410,3 +856,93 @@ def statistics(db: Session = Depends(get_db), _: User = Depends(get_admin_user))
         "total_products": db.query(Product).count(),
         "total_news": db.query(News).count(),
     }
+
+
+
+@fastapi_app.get("/")
+def root():
+    return {"message":"Veterinary Pharmacy API","version":"2.0.0"}
+
+def create_wsgi_app(asgi_app):
+    def application(environ, start_response):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            content_length = int(environ.get("CONTENT_LENGTH", 0) or 0)
+            body = environ["wsgi.input"].read(content_length) if content_length > 0 else b""
+            
+            scope = {
+                "type": "http", 
+                "asgi": {"version": "3.0"}, 
+                "http_version": "1.1",
+                "method": environ["REQUEST_METHOD"], 
+                "scheme": environ.get("wsgi.url_scheme", "http"),
+                "path": environ.get("PATH_INFO", "/"), 
+                "query_string": environ.get("QUERY_STRING", "").encode(),
+                "headers": _build_headers(environ),
+                "server": (environ.get("SERVER_NAME", "localhost"), int(environ.get("SERVER_PORT", 80))),
+            }
+            
+            response = {"status": 200, "headers": [], "body": []}
+            
+            async def receive(): 
+                return {"type": "http.request", "body": body, "more_body": False}
+            
+            async def send(message):
+                if message["type"] == "http.response.start":
+                    response["status"] = message["status"]
+                    response["headers"] = message.get("headers", [])
+                elif message["type"] == "http.response.body":
+                    response["body"].append(message.get("body", b""))
+            
+            loop.run_until_complete(asgi_app(scope, receive, send))
+            
+            # Convert headers and ensure CORS headers are present
+            headers = []
+            cors_headers_added = False
+            
+            for k, v in response["headers"]:
+                key = k.decode() if isinstance(k, bytes) else k
+                value = v.decode() if isinstance(v, bytes) else v
+                headers.append((key, value))
+                if key.lower() == 'access-control-allow-origin':
+                    cors_headers_added = True
+            
+            # If CORS headers weren't added by middleware, add them manually
+            # This ensures CORS works even if middleware fails
+            if not cors_headers_added:
+                origin = environ.get('HTTP_ORIGIN', '')
+                if origin:
+                    headers.append(('Access-Control-Allow-Origin', origin))
+                    headers.append(('Access-Control-Allow-Credentials', 'true'))
+                    headers.append(('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'))
+                    headers.append(('Access-Control-Allow-Headers', '*'))
+            
+            start_response(f"{response['status']} {_get_status_phrase(response['status'])}", headers)
+            return [b"".join(response["body"])]
+            
+        except Exception as e:
+            # IMPORTANT: Add CORS headers even for error responses
+            error_headers = [
+                ("Content-Type", "text/plain"),
+                ("Access-Control-Allow-Origin", environ.get('HTTP_ORIGIN', '*')),
+                ("Access-Control-Allow-Credentials", "true"),
+            ]
+            start_response("500 Internal Server Error", error_headers)
+            return [f"Internal Server Error: {str(e)}".encode()]
+        finally: 
+            loop.close()
+    return application
+    
+def _build_headers(environ):
+    headers = []
+    for key, value in environ.items():
+        if key.startswith("HTTP_"): headers.append((key[5:].replace("_", "-").lower().encode(), value.encode()))
+        elif key in ("CONTENT_TYPE", "CONTENT_LENGTH"): headers.append((key.replace("_", "-").lower().encode(), value.encode()))
+    return headers
+
+def _get_status_phrase(code):
+    return {200: "OK", 201: "Created", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 500: "Internal Server Error"}.get(code, "Unknown")
+
+
+application = create_wsgi_app(fastapi_app)
