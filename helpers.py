@@ -1,3 +1,4 @@
+import os
 import jwt
 from typing import Optional, List, Dict, Any
 from fastapi import HTTPException
@@ -5,22 +6,26 @@ from sqlalchemy.orm import Session
 from sqlalchemy import inspect as sa_inspect
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
-
+from fastapi.security import HTTPBearer
 from db import User, LanguageEnum, Base
+
 
 try:
     from config import Config
 except ImportError:
     class Config:
         security = {
-            "SECRET_KEY": "replace_me_in_prod",
-            "ALGORITHM": "HS256",
-            "ACCESS_TOKEN_EXPIRE_MINUTES": 525600,
-            "pwd_context": CryptContext(schemes=["bcrypt"], deprecated="auto")
+        "SECRET_KEY": os.getenv("SECRET_KEY", "your-secret-key-change-in-production"),
+        "ALGORITHM": os.getenv("ALGORITHM", "HS256"),
+        "ACCESS_TOKEN_EXPIRE_MINUTES": int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "525600")),
+        "pwd_context": CryptContext(schemes=["bcrypt"], deprecated="auto"),
+        "bearer_scheme": HTTPBearer(auto_error=False)
         }
 
 class AppHelpers:
     """Helper functions for authentication, database serialization, and i18n"""
+
+    image_manager = Config.imagekit
 
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:

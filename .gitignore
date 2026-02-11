@@ -9,3 +9,6 @@ create_db.py
 init.sql
 stderr.log
 tmp	
+seed_db.py
+README.md
+init_db.py

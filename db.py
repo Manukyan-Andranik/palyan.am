@@ -11,11 +11,11 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from typing import Optional, Dict, List, Any
 from pydantic import BaseModel as PydanticBaseModel
 
-try:
-    from config import Config
-except ImportError:
-    class Config:
-        database = {"SQLALCHEMY_DATABASE_URL": "sqlite:///./vetpharmacy.db"}
+# try:
+from config import Config
+# except ImportError:
+#     class Config:
+#         database = {"SQLALCHEMY_DATABASE_URL": "sqlite:///./vetpharmacy.db"}
 
 # Database initialization
 engine = create_engine(

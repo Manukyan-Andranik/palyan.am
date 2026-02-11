@@ -1,9 +1,11 @@
+import os
 import asyncio
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException, Depends, status, Form
+from fastapi import FastAPI, HTTPException, Depends, status, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session, joinedload
+
 
 from db import (
     SessionLocal,
@@ -17,6 +19,7 @@ from db import (
     NewsAuthor, NewsAuthorTranslation,
     NewsAuthorCreate, NewsAuthorUpdate
 )
+
 from helpers import AppHelpers
 import schemas
 
@@ -312,6 +315,23 @@ def get_news_detail(id: int, lang: Optional[str] = None, db: Session = Depends(g
     return AppHelpers.apply_language_filter(item, lang)
 
 # ==================== ADMIN ROUTES ====================
+
+@fastapi_app.post("/upload")
+async def upload_image(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+
+    upload_result = AppHelpers.image_manager.files.upload(
+        file=file_bytes,
+        file_name=file.filename,
+        folder="/uploads",
+    )
+
+    return {
+        "url": upload_result.url,
+        "fileId": upload_result.file_id,
+        "thumbnail_url": upload_result.thumbnail_url,
+    }
+
 
 @fastapi_app.post("/admin/types", tags=["admin"])
 def create_type(data: AnimalTypesCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
