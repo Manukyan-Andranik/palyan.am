@@ -316,8 +316,8 @@ def get_news_detail(id: int, lang: Optional[str] = None, db: Session = Depends(g
 
 # ==================== ADMIN ROUTES ====================
 
-@fastapi_app.post("/upload")
-async def upload_image(file: UploadFile = File(...)):
+@fastapi_app.post("/upload", tags=["admin"])
+async def upload_image(file: UploadFile = File(...),  db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     file_bytes = await file.read()
 
     upload_result = AppHelpers.image_manager.files.upload(
