@@ -171,7 +171,7 @@ class AppHelpers:
                 t_mapper = sa_inspect(t.__class__)
                 t_cols = {}
                 for c in t_mapper.columns:
-                    if c.key not in ["id", "language", "types_id", "category_id", "product_id", "news_id", "feature_id", "author_id"]:
+                    if c.key not in ["id", "language",  "category_id", "product_id", "news_id", "feature_id", "author_id"]:
                         t_cols[c.key] = getattr(t, c.key)
                 translations_map[t.language.value] = t_cols
 

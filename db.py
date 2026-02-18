@@ -44,25 +44,6 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-# ==================== ANIMAL TYPES MODELS ====================
-
-class AnimalTypes(Base):
-    __tablename__ = "animal_types"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255))
-    image_url = Column(String(500), nullable=True)
-    translations = relationship("AnimalTypesTranslation", back_populates="type_obj", cascade="all, delete-orphan")
-
-class AnimalTypesTranslation(Base):
-    __tablename__ = "animal_types_translations"
-    __table_args__ = (UniqueConstraint("types_id", "language"),)
-    id = Column(Integer, primary_key=True, index=True)
-    types_id = Column(Integer, ForeignKey("animal_types.id", ondelete="CASCADE"), nullable=False)
-    language = Column(SQLEnum(LanguageEnum), nullable=False)
-    name = Column(String(255))
-    description = Column(Text, nullable=True)
-    type_obj = relationship("AnimalTypes", back_populates="translations")
-
 # ==================== CATEGORY MODELS ====================
 
 class ProductCategory(Base):
@@ -113,12 +94,11 @@ class Product(Base):
     is_new = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    types_id = Column(Integer, ForeignKey("animal_types.id", ondelete="SET NULL"), nullable=True)
     category_id = Column(Integer, ForeignKey("product_categories.id", ondelete="SET NULL"), nullable=True)
     subcategory_id = Column(Integer, ForeignKey("product_subcategories.id", ondelete="SET NULL"), nullable=True)
     
     translations = relationship("ProductTranslation", back_populates="product", cascade="all, delete-orphan")
-    features = relationship("ProductFeature", back_populates="product", cascade="all, delete-orphan")
+    features = relationship("ProductFeature", back_populates="product", order_by="ProductFeature.id", cascade="all, delete-orphan")
 
 class ProductTranslation(Base):
     __tablename__ = "product_translations"
@@ -232,17 +212,6 @@ class Token(PydanticBaseModel):
     access_token: str
     token_type: str
 
-# Animal Types
-class AnimalTypesCreate(PydanticBaseModel):
-    name: str
-    image_url: Optional[str] = None
-    translations: Dict[str, Dict[str, str]]
-
-class AnimalTypesUpdate(PydanticBaseModel):
-    name: Optional[str] = None
-    image_url: Optional[str] = None
-    translations: Optional[Dict[str, Dict[str, str]]] = None
-
 # Categories
 class ProductCategoryCreate(PydanticBaseModel):
     name: Dict[str, str]
@@ -268,7 +237,6 @@ class ProductCreate(PydanticBaseModel):
     manufacturer: Optional[str] = None
     image_url: Optional[str] = None
     is_new: bool = False
-    types_id: Optional[int] = None
     category_id: Optional[int] = None
     subcategory_id: Optional[int] = None
     description: Dict[str, str]
@@ -281,7 +249,6 @@ class ProductUpdate(PydanticBaseModel):
     manufacturer: Optional[str] = None
     image_url: Optional[str] = None
     is_new: Optional[bool] = None
-    types_id: Optional[int] = None
     category_id: Optional[int] = None
     subcategory_id: Optional[int] = None
     description: Optional[Dict[str, str]] = None

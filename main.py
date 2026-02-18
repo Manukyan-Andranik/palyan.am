@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, joinedload
 from db import (
     SessionLocal,
     User, UserCreate, UserResponse, Token,
-    AnimalTypes, AnimalTypesCreate, AnimalTypesUpdate, AnimalTypesTranslation,
     ProductCategory, ProductCategoryCreate, ProductCategoryUpdate, ProductCategoryTranslation,
     ProductSubcategory, ProductSubcategoryCreate, ProductSubcategoryUpdate, ProductSubcategoryTranslation,
     Product, ProductCreate, ProductUpdate, ProductTranslation, 
@@ -122,22 +121,6 @@ def home(lang: Optional[str] = None, db: Session = Depends(get_db)):
         "latest_news": [AppHelpers.apply_language_filter(n, lang) for n in news],
     }
 
-# --- Types ---
-@fastapi_app.get("/types", tags=["public"])
-def list_types(lang: Optional[str] = None, db: Session = Depends(get_db)):
-    items = db.query(AnimalTypes).options(joinedload(AnimalTypes.translations)).all()
-    return [AppHelpers.apply_language_filter(i, lang) for i in items]
-
-@fastapi_app.get("/types/{id}", tags=["public"])
-def get_type(id: int, lang: Optional[str] = None, db: Session = Depends(get_db)):
-    item = db.query(AnimalTypes)\
-        .options(joinedload(AnimalTypes.translations))\
-        .filter(AnimalTypes.id == id)\
-        .first()
-    if not item:
-        raise HTTPException(404, "Species not found")
-    return AppHelpers.apply_language_filter(item, lang)
-
 # --- Categories ---
 @fastapi_app.get("/categories", tags=["public"])
 def list_categories(lang: Optional[str] = None, db: Session = Depends(get_db)):
@@ -238,7 +221,6 @@ def list_products(
     lang: Optional[str] = None,
     category_id: Optional[int] = None,
     subcategory_id: Optional[int] = None,
-    types_id: Optional[int] = None,
     search: Optional[str] = None,
     page: int = 1,
     per_page: int = 20,
@@ -246,21 +228,19 @@ def list_products(
 ):
     """
     List products with optional filters:
-    - category_id, subcategory_id, types_id
+    - category_id, subcategory_id
     - search (partial match against fallback product.name)
     - pagination via page & per_page
     """
     query = db.query(Product).options(
         joinedload(Product.translations),
         joinedload(Product.features).joinedload(ProductFeature.translations),
-    )
+    ).order_by(Product.id)
 
     if category_id is not None:
         query = query.filter(Product.category_id == category_id)
     if subcategory_id is not None:
         query = query.filter(Product.subcategory_id == subcategory_id)
-    if types_id is not None:
-        query = query.filter(Product.types_id == types_id)
     if search:
         # Search against fallback name; optionally could join translations for i18n search
         like_str = f"%{search}%"
@@ -280,7 +260,7 @@ def get_product(id: int, lang: Optional[str] = None, db: Session = Depends(get_d
     item = db.query(Product)\
         .options(
             joinedload(Product.translations), 
-            joinedload(Product.features).joinedload(ProductFeature.translations)
+            joinedload(Product.features).joinedload(ProductFeature.translations),
         )\
         .filter(Product.id == id)\
         .first()
@@ -331,42 +311,6 @@ async def upload_image(file: UploadFile = File(...),  db: Session = Depends(get_
         "fileId": upload_result.file_id,
         "thumbnail_url": upload_result.thumbnail_url,
     }
-
-
-@fastapi_app.post("/admin/types", tags=["admin"])
-def create_type(data: AnimalTypesCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
-    db_obj = AnimalTypes(name=data.name, image_url=data.image_url)
-    db.add(db_obj)
-    db.commit()
-    db.refresh(db_obj)
-    AppHelpers.save_translations(db, db_obj, data.translations, AnimalTypesTranslation, "types_id")
-    return AppHelpers.apply_language_filter(db_obj)
-
-@fastapi_app.put("/admin/types/{id}", tags=["admin"])
-def update_type(id: int, data: AnimalTypesUpdate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
-    db_obj = db.get(AnimalTypes, id)
-    if not db_obj:
-        raise HTTPException(404, "Not found")
-    
-    if data.name: 
-        db_obj.name = data.name
-    if data.image_url: 
-        db_obj.image_url = data.image_url
-    
-    db.commit()
-    if data.translations:
-        AppHelpers.save_translations(db, db_obj, data.translations, AnimalTypesTranslation, "types_id")
-    
-    return AppHelpers.apply_language_filter(db_obj)
-
-@fastapi_app.delete("/admin/types/{id}", tags=["admin"])
-def delete_type(id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
-    db_obj = db.get(AnimalTypes, id)
-    if not db_obj: 
-        raise HTTPException(404, "Not found")
-    db.delete(db_obj)
-    db.commit()
-    return {"status": "deleted"}
 
 # --- Categories ---
 
@@ -517,7 +461,6 @@ def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_
         manufacturer=product_in.manufacturer,
         image_url=product_in.image_url,
         is_new=product_in.is_new,
-        types_id=product_in.types_id,
         category_id=product_in.category_id,
         subcategory_id=product_in.subcategory_id
     )
@@ -997,7 +940,6 @@ def delete_news(id: int, db: Session = Depends(get_db), _: User = Depends(get_ad
 def statistics(db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     return {
         "total_users": db.query(User).count(),
-        "total_types": db.query(AnimalTypes).count(),
         "total_categories": db.query(ProductCategory).count(),
         "total_products": db.query(Product).count(),
         "total_news": db.query(News).count(),

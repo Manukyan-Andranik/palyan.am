@@ -9,7 +9,6 @@ class ProductCreate(BaseModel):
     manufacturer: Optional[str] = None
     image_url: Optional[str] = None
     is_new: bool = False
-    types_id: Optional[int] = None
     category_id: Optional[int] = None
     subcategory_id: Optional[int] = None
     description: Dict[str, str]  # Required Multilingual: {"en": "...", "ru": "...", "hy": "..."}
@@ -23,7 +22,6 @@ class ProductUpdate(BaseModel):
     manufacturer: Optional[str] = None
     image_url: Optional[str] = None
     is_new: Optional[bool] = None
-    types_id: Optional[int] = None
     category_id: Optional[int] = None
     subcategory_id: Optional[int] = None
     description: Optional[Dict[str, str]] = None  # Multilingual descriptions
@@ -38,7 +36,6 @@ class ProductResponse(BaseModel):
     manufacturer: Optional[str]
     image_url: Optional[str]
     is_new: bool
-    types_id: Optional[int]
     category_id: Optional[int]
     subcategory_id: Optional[int]
     
