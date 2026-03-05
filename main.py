@@ -22,6 +22,8 @@ from db import (
 from helpers import AppHelpers
 import schemas
 
+
+
 fastapi_app = FastAPI(
     title="Veterinary Pharmacy API",
     description="API for veterinary drugs and pet supplies store",
@@ -33,7 +35,12 @@ fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://palyan.onrender.com",
-        "https://palyan.am"
+        "https://palyan.am",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://localhost:4173"
+        
     ],    
     allow_credentials=True,
     allow_methods=["*"],
@@ -166,6 +173,7 @@ def list_categories(lang: Optional[str] = None, db: Session = Depends(get_db)):
             "name": category_name,
             "subcategories": subcats
         })
+    print(type(result[0]))
     return result
 
 @fastapi_app.get("/categories/{id}", tags=["public"])
@@ -223,19 +231,27 @@ def list_products(
     subcategory_id: Optional[int] = None,
     search: Optional[str] = None,
     page: int = 1,
-    per_page: int = 20,
+    limit: int = 24,
     db: Session = Depends(get_db),
 ):
     """
     List products with optional filters:
     - category_id, subcategory_id
     - search (partial match against fallback product.name)
-    - pagination via page & per_page
+    - pagination via page & limit
+    Returns {data, pagination} structure
     """
+    # Validate pagination params
+    if page < 1:
+        page = 1
+    if limit < 1:
+        limit = 24
+
+    # Build base query with filters
     query = db.query(Product).options(
         joinedload(Product.translations),
         joinedload(Product.features).joinedload(ProductFeature.translations),
-    ).order_by(Product.id)
+    )
 
     if category_id is not None:
         query = query.filter(Product.category_id == category_id)
@@ -246,14 +262,22 @@ def list_products(
         like_str = f"%{search}%"
         query = query.filter(Product.name.ilike(like_str))
 
-    # Pagination
-    if page < 1:
-        page = 1
-    if per_page < 1:
-        per_page = 20
+    # Get total count for pagination
+    total_items = query.count()
+    total_pages = (total_items + limit - 1) // limit  # Ceiling division
 
-    items = query.offset((page - 1) * per_page).limit(per_page).all()
-    return [AppHelpers.apply_language_filter(i, lang) for i in items]
+    # Apply ordering and pagination
+    items = query.order_by(Product.id).offset((page - 1) * limit).limit(limit).all()
+
+    return {
+        "data": [AppHelpers.apply_language_filter(i, lang) for i in items],
+        "pagination": {
+            "currentPage": page,
+            "totalPages": total_pages,
+            "totalItems": total_items,
+            "itemsPerPage": limit
+        }
+    }
 
 @fastapi_app.get("/products/{id}", tags=["public"])
 def get_product(id: int, lang: Optional[str] = None, db: Session = Depends(get_db)):
@@ -270,15 +294,45 @@ def get_product(id: int, lang: Optional[str] = None, db: Session = Depends(get_d
 
 # --- News ---
 @fastapi_app.get("/news", tags=["public"])
-def list_news(lang: Optional[str] = None, db: Session = Depends(get_db)):
-    items = db.query(News)\
-        .options(
-            joinedload(News.translations), 
-            joinedload(News.author).joinedload(NewsAuthor.translations),
-            joinedload(News.features).joinedload(NewsFeatures.translations)
-        )\
-        .all()
-    return [AppHelpers.apply_language_filter(i, lang) for i in items]
+def list_news(
+    lang: Optional[str] = None,
+    page: int = 1,
+    limit: int = 24,
+    db: Session = Depends(get_db)
+):
+    """
+    List news with pagination.
+    Returns {data, pagination} structure
+    """
+    # Validate pagination params
+    if page < 1:
+        page = 1
+    if limit < 1:
+        limit = 24
+
+    # Build query
+    query = db.query(News).options(
+        joinedload(News.translations), 
+        joinedload(News.author).joinedload(NewsAuthor.translations),
+        joinedload(News.features).joinedload(NewsFeatures.translations)
+    )
+
+    # Get total count for pagination
+    total_items = query.count()
+    total_pages = (total_items + limit - 1) // limit  # Ceiling division
+
+    # Apply ordering and pagination
+    items = query.order_by(News.published_at.desc()).offset((page - 1) * limit).limit(limit).all()
+
+    return {
+        "data": [AppHelpers.apply_language_filter(i, lang) for i in items],
+        "pagination": {
+            "currentPage": page,
+            "totalPages": total_pages,
+            "totalItems": total_items,
+            "itemsPerPage": limit
+        }
+    }
 
 @fastapi_app.get("/news/{id}", tags=["public"])
 def get_news_detail(id: int, lang: Optional[str] = None, db: Session = Depends(get_db)):
@@ -296,7 +350,7 @@ def get_news_detail(id: int, lang: Optional[str] = None, db: Session = Depends(g
 
 # ==================== ADMIN ROUTES ====================
 
-@fastapi_app.post("/upload", tags=["admin"])
+@fastapi_app.post("/admin/upload", tags=["admin"])
 async def upload_image(file: UploadFile = File(...),  db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     file_bytes = await file.read()
 
@@ -702,10 +756,10 @@ def delete_author(id: int, db: Session = Depends(get_db), _: User = Depends(get_
 def create_news(data: schemas.NewsCreate, db: Session = Depends(get_db), _: User = Depends(get_admin_user)):
     # Extract name/title from multilingual dict (use first available value as fallback)
     fallback_name = ""
-    if data.name and isinstance(data.name, dict):
-        fallback_name = next(iter(data.name.values())) if data.name else ""
-    elif isinstance(data.name, str):
-        fallback_name = data.name
+    if data.title and isinstance(data.title, dict):
+        fallback_name = next(iter(data.title.values())) if data.title else ""
+    elif isinstance(data.title, str):
+        fallback_name = data.title
     
     # Handle author: Priority is "author" object > "author_id"
     # If "author" object provided: create new author and use it
@@ -745,8 +799,8 @@ def create_news(data: schemas.NewsCreate, db: Session = Depends(get_db), _: User
     db.flush()  # Populate news_obj.id
 
     # 2. Add Translations for name/title and description
-    if data.name and isinstance(data.name, dict):
-        AppHelpers.save_translations(db, news_obj, data.name, NewsTranslation, "news_id", name_field="title")
+    if data.title and isinstance(data.title, dict):
+        AppHelpers.save_translations(db, news_obj, data.title, NewsTranslation, "news_id", name_field="title")
     
     if data.description and isinstance(data.description, dict):
         AppHelpers.save_translations(db, news_obj, data.description, NewsTranslation, "news_id", name_field="description")
@@ -797,8 +851,11 @@ def update_news(id: int, data: schemas.NewsUpdate, db: Session = Depends(get_db)
         raise HTTPException(404, "Not found")
 
     # Update scalar fields (excluding multilingual fields and author-related)
-    update_data = data.dict(exclude={"name", "description", "features", "author", "author_id"}, exclude_unset=True)
+    update_data = data.dict(exclude={"title", "description", "features", "author", "author_id"}, exclude_unset=True)
     for key, value in update_data.items():
+        if key == "title":
+            setattr(db_obj, "name", value)
+            # Update fallback name from first value
         if value is not None:
             setattr(db_obj, key, value)
 
@@ -846,8 +903,8 @@ def update_news(id: int, data: schemas.NewsUpdate, db: Session = Depends(get_db)
         db_obj.author_id = data.author_id
 
     # Handle name/title translations: if name dict provided, sync translations for NewsTranslation
-    if data.name and isinstance(data.name, dict):
-        AppHelpers.save_translations(db, db_obj, data.name, NewsTranslation, "news_id", name_field="title")
+    if data.title and isinstance(data.title, dict):
+        AppHelpers.save_translations(db, db_obj, data.title, NewsTranslation, "news_id", name_field="title")
 
     # Handle description translations: if description dict provided, sync translations for NewsTranslation
     if data.description and isinstance(data.description, dict):

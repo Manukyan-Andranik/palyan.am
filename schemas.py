@@ -69,7 +69,7 @@ class NewsAuthorResponse(BaseModel):
 
 # --- News Schemas ---
 class NewsCreate(BaseModel):
-    name: Dict[str, str]  # Required Multilingual: {"en": "...", "ru": "...", "hy": "..."}
+    title: Dict[str, str]  # Required Multilingual: {"en": "...", "ru": "...", "hy": "..."}
     image_url: Optional[str] = None
     author: Optional[NewsAuthorCreate] = None  # Create/update author inline or use author_id
     author_id: Optional[int] = None
@@ -78,7 +78,7 @@ class NewsCreate(BaseModel):
 
 
 class NewsUpdate(BaseModel):
-    name: Optional[Dict[str, str]] = None  # Multilingual: {"en": "...", "ru": "...", "hy": "..."}
+    title: Optional[Dict[str, str]] = None  # Multilingual: {"en": "...", "ru": "...", "hy": "..."}
     image_url: Optional[str] = None
     author: Optional[NewsAuthorUpdate] = None  # Update author inline or use author_id
     author_id: Optional[int] = None
