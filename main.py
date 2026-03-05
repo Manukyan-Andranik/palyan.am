@@ -267,7 +267,7 @@ def list_products(
     total_pages = (total_items + limit - 1) // limit  # Ceiling division
 
     # Apply ordering and pagination
-    items = query.order_by(Product.id).offset((page - 1) * limit).limit(limit).all()
+    items = query.order_by(Product.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
 
     return {
         "data": [AppHelpers.apply_language_filter(i, lang) for i in items],
